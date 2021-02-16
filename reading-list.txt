@@ -1,0 +1,14 @@
+[1] Dequidt, Alain, and Jose G. Solano Canchaya. "Bayesian parametrization of coarse-grain dissipative dynamics models." The Journal of chemical physics 143.8 (2015): 084122.
+	- Bayesian parametrisation and trajectory matching
+	
+[2] Solano Canchaya, José G., et al. "Development of DPD coarse-grained models: From bulk to interfacial properties." The Journal of chemical physics 145.5 (2016): 054107.
+	- Bayesian parametrisation for polymers
+	
+[3] Espanol, Pep, and Patrick Warren. "Statistical mechanics of dissipative particle dynamics." EPL (Europhysics Letters) 30.4 (1995): 191.
+	- Dissipative Particle Dynamics forces
+	
+[4] Unke, Oliver T., et al. "Machine learning force fields." arXiv preprint arXiv:2010.07067 (2020).
+	- Machine Learning in force field, review
+	
+[5] Zhang, Linfeng, et al. "DeePCG: Constructing coarse-grained models via deep neural networks." The Journal of chemical physics 149.3 (2018): 034101.
+	- Coarse-graining water using ANN's
