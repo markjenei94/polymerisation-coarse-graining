@@ -1,10 +1,12 @@
 import numpy as np
 import time
-import os
+
 
 class DataProcessing:
 
-    def __init__(self, outfile_path, timestep, cutoff, basis, basis_parameters, steps_between_points=1, steps_used_in_fit=100):
+    def __init__(self, outfile_path, timestep, cutoff, basis, basis_parameters,
+                 steps_between_points=1, steps_used_in_fit=100):
+
         self.t = steps_between_points
         self.n = steps_used_in_fit
         self.outfile_path = outfile_path
@@ -13,7 +15,8 @@ class DataProcessing:
         self.basis = basis
         self.basis_params = basis_parameters
 
-        self.atom_types = []
+        self.number_of_atom_types = 0
+        self.atom_type_pairs = []
         self.box_dimensions = []
         self.data = []
         self.r = []
@@ -26,9 +29,12 @@ class DataProcessing:
         self.target_vector = []
         self.weights = []
 
+        self.x_train = []
+        self.unique = []
+
     def read_data(self):
         number_of_output_properties = 11
-        print("Reading data\t",end="")
+        print("Reading data\t", end="")
         t_ = time.time()
 
         atom_types_dict = {}
@@ -45,11 +51,18 @@ class DataProcessing:
                     mass = line[1]
                     if mass not in list(atom_types_dict.keys()):
                         id += 1
-                        atom_types_dict[mass] = id
+                        atom_types_dict[mass] = str(id)
                         atom_types.append(atom_types_dict[mass])
                     else:
                         atom_types.append(atom_types_dict[mass])
-        self.atom_types = atom_types
+        self.number_of_atom_types = id
+        atom_type_pairs = np.array(np.meshgrid(atom_types, atom_types))
+        atom_type_pairs = np.char.add(atom_type_pairs[0], atom_type_pairs[1]).T
+        for i in range(len(atom_type_pairs)):
+            for j in range(len(atom_type_pairs[i])):
+                if atom_type_pairs[i][j][0] > atom_type_pairs[i][j][1]:
+                    atom_type_pairs[i][j] = atom_type_pairs[i][j][1] + atom_type_pairs[i][j][0]
+        self.atom_type_pairs = atom_type_pairs
 
         data = []
         with open(self.outfile_path) as f:
@@ -62,7 +75,7 @@ class DataProcessing:
                 if len(line) == 2:
                     if line[1] == "TIMESTEP":
                         t += 1
-                        if len(data) == self.n:
+                        if len(data) == self.n + 1:
                             break
                         if t % self.t == 0:
                             data.append([])
@@ -83,15 +96,19 @@ class DataProcessing:
         self.f = self.data[:, :, 7:10][1:-1]
         v = (self.r[1:] - self.r[:-1]) / self.timestep
         self.a = (v[1:] - v[:-1]) / self.timestep
-        print(np.round(time.time(), 2) - t_,"s")
+        print(np.round(time.time() - t_, 2), "s")
 
     def prepare_training_data(self):
-        print("Preparing input\t",end="")
+        print("Preparing input\t", end="")
         t_ = time.time()
         np.seterr(all='ignore')
         x_train = []
         y_train = []
         z_train = []
+
+        unique_type_pairs = np.array(self.atom_type_pairs)
+        unique_type_pairs = np.ravel(unique_type_pairs)
+        unique_type_pairs = np.unique(unique_type_pairs)
 
         for t in range(len(self.data)):
             lx, ly, lz = self.box_dimensions[t][0], self.box_dimensions[t][1], self.box_dimensions[t][2]
@@ -106,19 +123,22 @@ class DataProcessing:
             x_train.append([])
             y_train.append([])
             z_train.append([])
-            for p in self.basis_params:
-                force_p = self.basis(pbc_dist, p)
-                force_p = np.nan_to_num(force_p, posinf=0, neginf=0, nan=0)
-                force_p = np.where(pbc_dist > self.cutoff, 0, force_p)
+            for pair_type in unique_type_pairs:
+                for p in self.basis_params:
+                    force_p = self.basis(pbc_dist, p)
+                    force_p = np.nan_to_num(force_p, posinf=0, neginf=0, nan=0)
+                    force_p = np.where(pbc_dist > self.cutoff, 0, force_p)
+                    force_p = np.where(self.atom_type_pairs != pair_type, 0, force_p)
 
-                force_p_x = np.nan_to_num(force_p * pbc_relative_pos_x / pbc_dist, posinf=0, neginf=0, nan=0)
-                force_p_y = np.nan_to_num(force_p * pbc_relative_pos_y / pbc_dist, posinf=0, neginf=0, nan=0)
-                force_p_z = np.nan_to_num(force_p * pbc_relative_pos_z / pbc_dist, posinf=0, neginf=0, nan=0)
+                    force_p_x = np.nan_to_num(force_p * pbc_relative_pos_x / pbc_dist, posinf=0, neginf=0, nan=0)
+                    force_p_y = np.nan_to_num(force_p * pbc_relative_pos_y / pbc_dist, posinf=0, neginf=0, nan=0)
+                    force_p_z = np.nan_to_num(force_p * pbc_relative_pos_z / pbc_dist, posinf=0, neginf=0, nan=0)
 
-                x_train[-1].append(np.sum(force_p_x, axis=0))
-                y_train[-1].append(np.sum(force_p_y, axis=0))
-                z_train[-1].append(np.sum(force_p_z, axis=0))
+                    x_train[-1].append(np.sum(force_p_x, axis=0))
+                    y_train[-1].append(np.sum(force_p_y, axis=0))
+                    z_train[-1].append(np.sum(force_p_z, axis=0))
 
+        self.x_train = np.array(x_train)
         m = self.data[0][0][0]
         target_vector = np.array(self.a) * m
         target_vector = np.swapaxes(target_vector, 1, 2)
@@ -132,33 +152,37 @@ class DataProcessing:
         print(np.round(time.time() - t_, 2), "s")
 
     def regress(self, method='simple'):
-        t = time.time()
-        feature_matrix_t = []
+        feature_matrix = []
         target_vector = []
         if method == 'simple':
-            feature_matrix_t = np.swapaxes(self.feature_matrix_t, 0, 1)
-            feature_matrix_t = np.reshape(feature_matrix_t, (np.size(feature_matrix_t, axis=0),
-                                                             np.size(feature_matrix_t, axis=1) * np.size(
-                                                                 feature_matrix_t, axis=2)))
+            feature_matrix = np.swapaxes(self.feature_matrix_t, 0, 1)
+            feature_matrix = np.reshape(feature_matrix, (np.size(feature_matrix, axis=0),
+                                                             np.size(feature_matrix, axis=1) * np.size(
+                                                                 feature_matrix, axis=2)))
             target_vector = np.ravel(self.target_vector)
 
         if method == "bayesian":
-            feature_matrix_t = np.swapaxes(self.feature_matrix_t, 0, 1)
-            feature_matrix_t = np.sum(feature_matrix_t, axis=1)
+            feature_matrix = np.swapaxes(self.feature_matrix_t, 0, 1)
+            feature_matrix = np.sum(feature_matrix, axis=1)
             target_vector = np.sum(self.target_vector, axis=0)
 
-
-        projection = np.matmul(feature_matrix_t, target_vector)
-        norm = np.matmul(feature_matrix_t, feature_matrix_t.T)
-        t = time.time()
+        projection = np.matmul(feature_matrix, target_vector)
+        norm = np.matmul(feature_matrix, feature_matrix.T)
         norm_inverse = np.linalg.inv(norm)
         self.weights = np.matmul(norm_inverse, projection)
 
     def predict(self, x):
-        if type(x) == float:
-            y = 0
-        else:
-            y = np.zeros(len(x))
-        for i in range(len(self.basis_params)):
-            y = y + self.weights[i] * self.basis(x, self.basis_params[i])
-        return y / 4.184e-4 #` unit conversion from kcal
+        # TODO: generalise for more pair_type's
+        number_of_type_pairs = len(np.unique(np.ravel(np.array(self.atom_type_pairs))))
+        p = len(self.weights)
+        number_of_forces = int(p / number_of_type_pairs)
+        Y = []
+        for i in range(number_of_type_pairs):
+            if type(x) == float:
+                y = 0
+            else:
+                y = np.zeros(len(x))
+            for j in range(len(self.basis_params)):
+                y = y + self.weights[i*number_of_forces + j] * self.basis(x, self.basis_params[j])
+            Y.append(y / 4.184e-4)
+        return Y  # ` unit conversion from kcal
