@@ -172,7 +172,6 @@ class DataProcessing:
         self.weights = np.matmul(norm_inverse, projection)
 
     def predict(self, x):
-        # TODO: generalise for more pair_type's
         number_of_type_pairs = len(np.unique(np.ravel(np.array(self.atom_type_pairs))))
         p = len(self.weights)
         number_of_forces = int(p / number_of_type_pairs)
