@@ -9,10 +9,10 @@ atom_style	atomic
 dimension	3
 boundary	p p p
 
-lattice 	custom 13 a1 1.0 0.0 0.0 a2 0.0 1.0 0.0 a3 0.0 0.0 2.0 & 
+lattice 	custom 13 a1 1.0 0.0 0.0 a2 0.0 1.0 0.0 a3 0.0 0.0 1.0 & 
 		basis 0.0 0.0 0.0 basis 0.5 0.5 0.5 &
 		basis 0.25 0.25 0.0 basis 0.75 0.75 0.0 basis 0.75 0.25 0.5 basis 0.25 0.75 0.5
-region 	space block 0 4 0 4 0 4
+region 	space block 0 5 0 5 0 5
 create_box 	2 space
 create_atoms 	1 box basis 3 2 basis 4 2 basis 5 2 basis 6 2
 
@@ -73,18 +73,19 @@ thermo_style	custom step temp press vol density
 run_style	verlet
 
 thermo		1000
-run		4000000
+run		300000
 
 unfix 		1
 fix		1 all nve
-run 		2000000
+run 		200000
 
 #dump pos all xyz 10 lj.xyz
 
-dump		2 all custom 5 lj_trajectory_match_nve.out id mass xu yu zu vx vy vz fx fy fz
-dump_modify	2 sort id
+dump		2 all custom 1 lj_trajectory_match_nve_large.out id mass x y z xu yu zu fx fy fz
+dump_modify	2 sort id  
+dump_modify	2 format line "%d %.2f %.12f %.12f %.12f %.6f %.6f %.6f %.3f %.3f %.3f"
 
-run		10000
+run		2000
 
 ####################################
 # 6) Advanced inputs 
