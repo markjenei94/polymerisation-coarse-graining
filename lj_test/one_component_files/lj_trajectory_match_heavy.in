@@ -1,0 +1,114 @@
+####################################
+# Example LAMMPS input script      #
+# for a simple Lennard Jones fluid #
+####################################
+
+####################################
+# 1) Set up simulation box
+#   - We set a 3D periodic box
+#   - Our box has 10x10x10 atom 
+#     positions, evenly distributed
+#   - The atom starting sites are
+#     separated such that the box density
+#     is 0.6
+####################################
+
+units		real
+atom_style	atomic
+dimension	3
+boundary	p p p
+
+lattice	sc 8
+region		box block 0 6 0 6 0 6
+create_box	1 box
+create_atoms	1 box
+
+####################################
+# 2) Define interparticle interactions
+#   - Here, we use truncated & shifted LJ
+#   - All atoms of type 1 (in this case, all atoms)
+#     have a mass of 1.0
+####################################
+
+pair_style	lj/cut 15
+pair_modify	shift yes
+pair_coeff	1 1 1.0 7.5
+mass		1 340.419
+
+####################################
+# 3) Neighbour lists
+#   - Each atom will only consider neighbours
+#     within a distance of 2.8 of each other
+#   - The neighbour lists are recalculated
+#     every timestep
+####################################
+
+neighbor        0.3 bin
+neigh_modify    delay 10 every 1
+
+####################################
+# 4) Define simulation parameters
+#   - We fix the temperature and 
+#     linear and angular momenta
+#     of the system 
+#   - We run with fixed number (n),
+#     volume (v), temperature (t)
+####################################
+
+#fix		LinMom all momentum 50 linear 1 1 1 angular
+#fix		1 all nvt temp 1.00 1.00 5.0
+fix 		1 all npt temp 373.0 373.0 25.0 iso 1.0 1.0  10.0
+
+####################################
+# 5) Final setup
+#   - Define starting particle velocity
+#   - Define timestep
+#   - Define output system properties (temp, energy, etc.)
+#   - Define simulation length
+####################################
+
+velocity	all create 373.0 199085 mom no
+
+timestep	0.5
+
+thermo_style	custom step temp press vol density #lx ly lz
+
+
+run_style	verlet
+
+thermo		1000
+run		4000000
+
+unfix 		1
+fix		1 all nve
+run 		2000000
+
+#dump pos all xyz 10 lj.xyz
+
+thermo		250
+
+dump		2 all custom 20 lj_trajectory_match_heavy_nve.out id mass x y z xu yu zu fx fy fz
+dump_modify	2 sort id
+dump_modify	2 format line "%d %.2f %.12f %.12f %.12f %.6f %.6f %.6f %.3f %.3f %.3f"
+
+run		60000
+
+####################################
+# 6) Advanced inputs 
+####################################
+
+#dump		2 all custom 1000 positions.lammpstrj id x y z vx vy vz
+#dump_modify	2 sort id
+
+#compute		RDF all rdf 150 cutoff 3.5
+#fix		RDF_OUTPUT all ave/time 25 100 5000 c_RDF[*] file rdf_lj.out mode vector
+
+#compute		MSD all msd
+#fix		MSD_OUTPUT all ave/correlate 1 5000 5000 c_MSD[*] file msd_lj.out ave running
+
+#compute		VACF all vacf
+#fix		VACF_OUTPUT all ave/correlate 1 2500 5000 c_VACF[*] file vacf_lj.out ave running
+
+#run		5000
+
+#write_restart	restart2.lj.equil

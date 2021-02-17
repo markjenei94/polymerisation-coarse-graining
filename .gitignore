@@ -1,12 +1,6 @@
 /venv/
 /lj_test/two_component_files/lj_trajectory_match_npt.out
 /lj_test/two_component_files/lj_trajectory_match_nve.out
-/lj_test/one_component_files/lj_trajectory_match_npt.out
-/lj_test/one_component_files/lj_trajectory_match_nve.out
-/lj_test/one_component_files/lj_npt_dump.out
-/lj_test/one_component_files/lj_npt_vacf.out
-/lj_test/one_component_files/lj_nve_dump.out
-/lj_test/one_component_files/lj_nve_vacf.out
 /lj_test/two_component_files/lj_trajectory_match_nve_long.out
 /lj_test/two_component_files/lj_trajectory_match_nve_large.out
 /lj_test/two_component_files/lj_trajectory_match_nve_test.out

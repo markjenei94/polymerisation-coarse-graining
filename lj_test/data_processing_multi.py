@@ -4,13 +4,13 @@ import time
 
 class DataProcessing:
 
-    def __init__(self, outfile_path, timestep, cutoff, basis, basis_parameters,
-                 steps_between_points=1, steps_used_in_fit=100):
+    def __init__(self, outfile_path, simulation_timestep, cutoff, basis, basis_parameters,
+                 evrey_n_from_output=1, timesteps_in_fit=100):
 
-        self.t = steps_between_points
-        self.n = steps_used_in_fit
+        self.t = evrey_n_from_output
+        self.n = timesteps_in_fit
         self.outfile_path = outfile_path
-        self.timestep = timestep
+        self.timestep = simulation_timestep * evrey_n_from_output
         self.cutoff = cutoff
         self.basis = basis
         self.basis_params = basis_parameters
@@ -41,12 +41,18 @@ class DataProcessing:
         atom_types = []
         t = -1
         id = 0
+        output_timestep = 0
         with open(self.outfile_path) as f:
             while t < 1:
                 line = f.readline().split()
                 if len(line) > 1:
                     if line[1] == "TIMESTEP":
                         t += 1
+                        if output_timestep == 0:
+                            output_timestep = int(f.readline().split()[0])
+                        else:
+                            output_timestep = int(f.readline().split()[0]) - output_timestep
+                            self.timestep *= output_timestep
                 if len(line) == number_of_output_properties:
                     mass = line[1]
                     if mass not in list(atom_types_dict.keys()):
@@ -75,7 +81,7 @@ class DataProcessing:
                 if len(line) == 2:
                     if line[1] == "TIMESTEP":
                         t += 1
-                        if len(data) == self.n + 1:
+                        if len(data) == self.n:
                             break
                         if t % self.t == 0:
                             data.append([])
