@@ -73,19 +73,19 @@ thermo_style	custom step temp press vol density
 run_style	verlet
 
 thermo		1000
-run		300000
+run		4000000
 
-unfix 		1
-fix		1 all nve
-run 		200000
+#unfix 		1
+#fix		1 all nve
+#run 		2000000
 
 #dump pos all xyz 10 lj.xyz
 
-dump		2 all custom 1 lj_trajectory_match_nve_large.out id mass x y z xu yu zu fx fy fz
+dump		2 all custom 10 lj_trajectory_match_npt_test.out id mass x y z xu yu zu fx fy fz
 dump_modify	2 sort id  
 dump_modify	2 format line "%d %.2f %.12f %.12f %.12f %.6f %.6f %.6f %.3f %.3f %.3f"
 
-run		2000
+run		30000
 
 ####################################
 # 6) Advanced inputs 

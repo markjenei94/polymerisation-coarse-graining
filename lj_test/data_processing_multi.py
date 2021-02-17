@@ -29,9 +29,6 @@ class DataProcessing:
         self.target_vector = []
         self.weights = []
 
-        self.x_train = []
-        self.unique = []
-
     def read_data(self):
         number_of_output_properties = 11
         print("Reading data\t", end="")
@@ -116,7 +113,7 @@ class DataProcessing:
         unique_type_pairs = np.ravel(unique_type_pairs)
         unique_type_pairs = np.unique(unique_type_pairs)
 
-        for t in range(len(self.data)):
+        for t in range(len(self.r)):
             lx, ly, lz = self.box_dimensions[t][0], self.box_dimensions[t][1], self.box_dimensions[t][2]
             relative_pos_x = d_x = -np.subtract.outer(self.r[t, :, 0], self.r[t, :, 0])
             relative_pos_y = d_y = -np.subtract.outer(self.r[t, :, 1], self.r[t, :, 1])
@@ -144,7 +141,6 @@ class DataProcessing:
                     y_train[-1].append(np.sum(force_p_y, axis=0))
                     z_train[-1].append(np.sum(force_p_z, axis=0))
 
-        self.x_train = np.array(x_train)
         m = self.data[0][0][0]
         target_vector = np.array(self.a) * m
         target_vector = np.swapaxes(target_vector, 1, 2)
