@@ -104,6 +104,8 @@ class TrajectoryMatching:
         print(np.round(time.time() - t_, 2), "s")
 
     def _construct_features(self, packed_t_data):
+        np.seterr(all='ignore')
+
         r_t = packed_t_data[0]
         box_dimensions = packed_t_data[1]
         x_train = []
@@ -139,12 +141,9 @@ class TrajectoryMatching:
     def prepare_training_data(self):
         print("Preparing input\t", end="")
         t_ = time.time()
-        np.seterr(all='ignore')
 
-        unique_type_pairs = np.array(self.atom_type_pairs)
-        unique_type_pairs = np.ravel(unique_type_pairs)
-        unique_type_pairs = np.unique(unique_type_pairs)
-        self.unique_type_pairs = unique_type_pairs
+        unique_type_pairs = np.ravel(np.array(self.atom_type_pairs))
+        self.unique_type_pairs = np.unique(unique_type_pairs)
 
         vec_packed_t_data = []
         for t in range(len(self.r)):
@@ -155,47 +154,6 @@ class TrajectoryMatching:
         y_train = train_features[1]
         z_train = train_features[2]
 
-
-        '''
-        for t in range(len(self.r)):
-
-            packed_t_data = [self.r[t], self.box_dimensions[t]]
-            x, y, z = self._construct_features(packed_t_data)
-
-            x_train.append(x)
-            y_train.append(y)
-            z_train.append(z)
-        '''
-
-        '''
-            x_train.append([])
-            y_train.append([])
-            z_train.append([])
-            lx, ly, lz = self.box_dimensions[t][0], self.box_dimensions[t][1], self.box_dimensions[t][2]
-            relative_pos_x = d_x = -np.subtract.outer(self.r[t, :, 0], self.r[t, :, 0])
-            relative_pos_y = d_y = -np.subtract.outer(self.r[t, :, 1], self.r[t, :, 1])
-            relative_pos_z = d_z = -np.subtract.outer(self.r[t, :, 2], self.r[t, :, 2])
-            pbc_relative_pos_x = d_pbc_x = np.where(np.abs(d_x) >= 0.5 * lx, d_x - np.sign(d_x) * lx, relative_pos_x)
-            pbc_relative_pos_y = d_pbc_y = np.where(np.abs(d_y) >= 0.5 * ly, d_y - np.sign(d_y) * ly, relative_pos_y)
-            pbc_relative_pos_z = d_pbc_z = np.where(np.abs(d_z) >= 0.5 * lz, d_z - np.sign(d_z) * lz, relative_pos_z)
-            pbc_dist = np.sqrt(d_pbc_x ** 2 + d_pbc_y ** 2 + d_pbc_z ** 2)
-
-            for pair_type in unique_type_pairs:
-                for p in self.basis_params:
-                    force_p = self.basis(pbc_dist, p)
-                    force_p = np.nan_to_num(force_p, posinf=0, neginf=0, nan=0)
-                    force_p = np.where(pbc_dist > self.cutoff, 0, force_p)
-                    force_p = np.where(self.atom_type_pairs != pair_type, 0, force_p)
-
-                    force_p_x = np.nan_to_num(force_p * pbc_relative_pos_x / pbc_dist, posinf=0, neginf=0, nan=0)
-                    force_p_y = np.nan_to_num(force_p * pbc_relative_pos_y / pbc_dist, posinf=0, neginf=0, nan=0)
-                    force_p_z = np.nan_to_num(force_p * pbc_relative_pos_z / pbc_dist, posinf=0, neginf=0, nan=0)
-
-                    x_train[-1].append(np.sum(force_p_x, axis=0))
-                    y_train[-1].append(np.sum(force_p_y, axis=0))
-                    z_train[-1].append(np.sum(force_p_z, axis=0))
-        '''
-
         self.x_train = np.array(x_train)
         m = self.data[0][0][0]
         target_vector = np.array(self.a) * m
@@ -204,9 +162,9 @@ class TrajectoryMatching:
                                                    np.size(self.a, axis=2) * np.size(self.a, axis=1)))
 
         feature_matrix_t = np.concatenate((x_train, y_train, z_train), axis=2)[1:-1]
-
         self.feature_matrix_t = feature_matrix_t
         self.target_vector = target_vector
+
         print(np.round(time.time() - t_, 2), "s")
 
     def regress(self, method='simple'):

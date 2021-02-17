@@ -1,7 +1,2 @@
 /venv/
-/lj_test/two_component_files/lj_trajectory_match_npt.out
-/lj_test/two_component_files/lj_trajectory_match_nve.out
-/lj_test/two_component_files/lj_trajectory_match_nve_long.out
-/lj_test/two_component_files/lj_trajectory_match_nve_large.out
-/lj_test/two_component_files/lj_trajectory_match_nve_test.out
 /lj_test/test.ipynb
