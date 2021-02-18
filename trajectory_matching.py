@@ -11,6 +11,7 @@ class TrajectoryMatching:
         self.t = evrey_n_from_output
         self.n = timesteps_in_fit
         self.outfile_path = outfile_path
+        self.output_properties = []
         self.timestep = simulation_timestep * evrey_n_from_output
         self.cutoff = cutoff
         self.basis = basis
@@ -32,15 +33,16 @@ class TrajectoryMatching:
         self.weights = []
 
     def read_data(self):
-        number_of_output_properties = 11
         print("Reading data\t", end="")
         t_ = time.time()
 
+        # Gather information
         atom_types_dict = {}
         atom_types = []
         t = -1
         id = 0
         output_timestep = 0
+        output_properties = []
         with open(self.outfile_path) as f:
             while t < 1:
                 line = f.readline().split()
@@ -52,7 +54,10 @@ class TrajectoryMatching:
                         else:
                             output_timestep = int(f.readline().split()[0]) - output_timestep
                             self.timestep *= output_timestep
-                if len(line) == number_of_output_properties:
+                    if line[0] == "ITEM:" and line[1] == "ATOMS":
+                        output_properties = np.array(line[2:])
+                        self.output_properties = output_properties
+                if len(line) == len(output_properties):
                     mass = line[1]
                     if mass not in list(atom_types_dict.keys()):
                         id += 1
@@ -92,15 +97,20 @@ class TrajectoryMatching:
                             dimensions.append(float(line[1]) - float(line[0]))
                         i += 3
                         self.box_dimensions.append(dimensions)
-                elif len(line) == number_of_output_properties and t % self.t == 0:
+                elif len(line) == len(output_properties) and t % self.t == 0:
                     data[-1].append(np.array(line).astype(float)[1:])
 
         self.data = np.array(data)
-        self.r = self.data[:, :, 1:4]
-        self.ru = self.data[:, :, 4:7]
-        self.f = self.data[:, :, 7:10][1:-1]
-        v = (self.r[1:] - self.r[:-1]) / self.timestep
+        r_columns = ~ ((self.output_properties[1:] == 'x') | (self.output_properties[1:] == 'y') |
+                       (self.output_properties[1:] == 'z'))
+        self.r = np.array(np.delete(data, r_columns, axis=2))
+        ru_columns = ~ ((self.output_properties[1:] == 'xu') | (self.output_properties[1:] == 'yu') |
+                        (self.output_properties[1:] == 'zu'))
+        self.ru = np.array(np.delete(data, ru_columns, axis=2))
+
+        v = (self.ru[1:] - self.ru[:-1]) / self.timestep
         self.a = (v[1:] - v[:-1]) / self.timestep
+
         print(np.round(time.time() - t_, 2), "s")
 
     def _construct_features(self, packed_t_data):
@@ -153,15 +163,15 @@ class TrajectoryMatching:
         x_train = train_features[0]
         y_train = train_features[1]
         z_train = train_features[2]
+        feature_matrix_t = np.concatenate((x_train, y_train, z_train), axis=2)[1:-1]
 
-        self.x_train = np.array(x_train)
-        m = self.data[0][0][0]
-        target_vector = np.array(self.a) * m
-        target_vector = np.swapaxes(target_vector, 1, 2)
+        target_vector = np.swapaxes(self.a, 1, 2)
         target_vector = np.reshape(target_vector, (np.size(self.a, axis=0),
                                                    np.size(self.a, axis=2) * np.size(self.a, axis=1)))
 
-        feature_matrix_t = np.concatenate((x_train, y_train, z_train), axis=2)[1:-1]
+        m = np.ravel(list([self.data[0,:,0]]) * 3)
+        target_vector = target_vector * m
+
         self.feature_matrix_t = feature_matrix_t
         self.target_vector = target_vector
 

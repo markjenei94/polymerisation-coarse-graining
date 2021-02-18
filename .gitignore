@@ -1,2 +1,5 @@
 /venv/
 /lj_test/test.ipynb
+**/log.lammps
+*log.lammps
+/test.ipynb
