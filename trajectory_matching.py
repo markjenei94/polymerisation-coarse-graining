@@ -6,7 +6,7 @@ from multiprocessing import Pool
 class TrajectoryMatching:
 
     def __init__(self, outfile_path, simulation_timestep, cutoff, basis, basis_parameters,
-                 evrey_n_from_output=1, timesteps_in_fit=100):
+                 evrey_n_from_output=1, timesteps_in_fit=100, system_style='atomic'):
 
         self.t = evrey_n_from_output
         self.n = timesteps_in_fit
@@ -21,11 +21,15 @@ class TrajectoryMatching:
         self.atom_type_pairs = []
         self.unique_type_pairs = []
         self.box_dimensions = []
+        self.box_lo = []
         self.data = []
         self.r = []
         self.ru = []
         self.a = []
-        self.f = []
+        if system_style not in ["atomic", "molecular"]:
+            raise ValueError("'system_style' most be either 'atomic' or 'molecular'")
+        else:
+            self.system_style = system_style
         self.read_data()
 
         self.feature_matrix_t = []
@@ -92,26 +96,61 @@ class TrajectoryMatching:
                 elif len(line) == 6 and t % self.t == 0:
                     if line[1] == "BOX":
                         dimensions = []
+                        self.box_lo.append([])
                         for j in range(3):
                             line = f.readline().split()
                             dimensions.append(float(line[1]) - float(line[0]))
+                            self.box_lo[-1].append(float(line[0]))
                         i += 3
                         self.box_dimensions.append(dimensions)
                 elif len(line) == len(output_properties) and t % self.t == 0:
                     data[-1].append(np.array(line).astype(float)[1:])
 
         self.data = np.array(data)
-        r_columns = ~ ((self.output_properties[1:] == 'x') | (self.output_properties[1:] == 'y') |
-                       (self.output_properties[1:] == 'z'))
-        self.r = np.array(np.delete(data, r_columns, axis=2))
-        ru_columns = ~ ((self.output_properties[1:] == 'xu') | (self.output_properties[1:] == 'yu') |
-                        (self.output_properties[1:] == 'zu'))
-        self.ru = np.array(np.delete(data, ru_columns, axis=2))
+        if self.system_style == "molecular":
+            mol_ids = np.unique(self.data[:, :, int(np.where(output_properties[1:] == 'mol')[0])])
+            reduced_data = Pool().map(self._reduce_to_centre_of_mass, mol_ids)
+            self.data = np.swapaxes(np.array(reduced_data), 0, 1)
+            self.ru = self.data[:, :, 1:4]
+
+            shift_to_centre = np.repeat([np.array(self.box_lo)], np.array(self.data).shape[1], axis=0)
+            shift_to_centre = np.swapaxes(shift_to_centre, 0, 1)
+            shift_to_unit_cell = np.repeat([np.array(self.box_dimensions)], np.array(self.data).shape[1], axis=0)
+            shift_to_unit_cell = np.swapaxes(shift_to_unit_cell, 0, 1)
+
+            self.debug = shift_to_centre
+
+            self.r = self.ru - shift_to_centre
+            self.r = (self.r / shift_to_unit_cell).astype(int) * shift_to_unit_cell
+            self.r = self.ru - self.r + shift_to_centre
+        else:
+            r_columns = ~ ((self.output_properties[1:] == 'x') | (self.output_properties[1:] == 'y') |
+                           (self.output_properties[1:] == 'z'))
+            self.r = np.array(np.delete(data, r_columns, axis=2))
+            ru_columns = ~ ((self.output_properties[1:] == 'xu') | (self.output_properties[1:] == 'yu') |
+                            (self.output_properties[1:] == 'zu'))
+            self.ru = np.array(np.delete(data, ru_columns, axis=2))
 
         v = (self.ru[1:] - self.ru[:-1]) / self.timestep
         self.a = (v[1:] - v[:-1]) / self.timestep
 
         print(np.round(time.time() - t_, 2), "s")
+
+    def _reduce_to_centre_of_mass(self, mol_id):
+        data = self.data
+        data = data[np.where(data[:, :, 1] == mol_id)]
+        data = np.reshape(data, (np.array(self.data).shape[0], -1, data.shape[-1]))
+        columns = ~ ((self.output_properties[1:] == 'mass') | (self.output_properties[1:] == 'xu') | (
+                self.output_properties[1:] == 'yu') | (self.output_properties[1:] == 'zu'))
+        data = np.delete(data, columns, axis=2)
+
+        m = np.sum(data[0], axis=0)[0]
+        data = np.swapaxes(data, 1, 2)
+        data[:, 1:] = data[:, 1:] * data[0, 0] / m
+        data = np.swapaxes(data, 1, 2)
+        data = np.sum(data, axis=1)
+
+        return data
 
     def _construct_features(self, packed_t_data):
         np.seterr(all='ignore')
@@ -166,10 +205,10 @@ class TrajectoryMatching:
         feature_matrix_t = np.concatenate((x_train, y_train, z_train), axis=2)[1:-1]
 
         target_vector = np.swapaxes(self.a, 1, 2)
-        target_vector = np.reshape(target_vector, (np.size(self.a, axis=0),
-                                                   np.size(self.a, axis=2) * np.size(self.a, axis=1)))
+        target_vector = np.reshape(target_vector,
+                                   (np.size(self.a, axis=0), np.size(self.a, axis=2) * np.size(self.a, axis=1)))
 
-        m = np.ravel(list([self.data[0,:,0]]) * 3)
+        m = np.ravel(list([self.data[0, :, 0]]) * 3)
         target_vector = target_vector * m
 
         self.feature_matrix_t = feature_matrix_t
@@ -183,8 +222,8 @@ class TrajectoryMatching:
         if method == 'simple':
             feature_matrix = np.swapaxes(self.feature_matrix_t, 0, 1)
             feature_matrix = np.reshape(feature_matrix, (np.size(feature_matrix, axis=0),
-                                                             np.size(feature_matrix, axis=1) * np.size(
-                                                                 feature_matrix, axis=2)))
+                                                         np.size(feature_matrix, axis=1) * np.size(
+                                                             feature_matrix, axis=2)))
             target_vector = np.ravel(self.target_vector)
 
         if method == "bayesian":
@@ -208,6 +247,6 @@ class TrajectoryMatching:
             else:
                 y = np.zeros(len(x))
             for j in range(len(self.basis_params)):
-                y = y + self.weights[i*number_of_forces + j] * self.basis(x, self.basis_params[j])
+                y = y + self.weights[i * number_of_forces + j] * self.basis(x, self.basis_params[j])
             Y.append(y / 4.184e-4)
         return Y  # ` unit conversion from kcal
