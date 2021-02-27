@@ -6,18 +6,17 @@ from multiprocessing import Pool
 class TrajectoryMatching:
 
     def __init__(self, outfile_path, simulation_timestep, cutoff, basis, basis_parameters,
-                 evrey_n_from_output=1, timesteps_in_fit=100, system_style='atomic'):
+                 every_n_from_output=1, timesteps_in_fit=100, system_style='atomic'):
 
-        self.t = evrey_n_from_output
+        self.t = every_n_from_output
         self.n = timesteps_in_fit
         self.outfile_path = outfile_path
         self.output_properties = []
-        self.timestep = simulation_timestep * evrey_n_from_output
+        self.timestep = simulation_timestep * every_n_from_output
         self.cutoff = cutoff
         self.basis = basis
         self.basis_params = basis_parameters
 
-        self.number_of_atom_types = 0
         self.atom_type_pairs = []
         self.unique_type_pairs = []
         self.box_dimensions = []
@@ -36,15 +35,14 @@ class TrajectoryMatching:
         self.target_vector = []
         self.weights = []
 
+        self.debug = []
+
     def read_data(self):
         print("Reading data\t", end="")
         t_ = time.time()
 
         # Gather information
-        atom_types_dict = {}
-        atom_types = []
         t = -1
-        id = 0
         output_timestep = 0
         output_properties = []
         with open(self.outfile_path) as f:
@@ -61,22 +59,8 @@ class TrajectoryMatching:
                     if line[0] == "ITEM:" and line[1] == "ATOMS":
                         output_properties = np.array(line[2:])
                         self.output_properties = output_properties
-                if len(line) == len(output_properties):
-                    mass = line[1]
-                    if mass not in list(atom_types_dict.keys()):
-                        id += 1
-                        atom_types_dict[mass] = str(id)
-                        atom_types.append(atom_types_dict[mass])
-                    else:
-                        atom_types.append(atom_types_dict[mass])
-        self.number_of_atom_types = id
-        atom_type_pairs = np.array(np.meshgrid(atom_types, atom_types))
-        atom_type_pairs = np.char.add(atom_type_pairs[0], atom_type_pairs[1]).T
-        for i in range(len(atom_type_pairs)):
-            for j in range(len(atom_type_pairs[i])):
-                if atom_type_pairs[i][j][0] > atom_type_pairs[i][j][1]:
-                    atom_type_pairs[i][j] = atom_type_pairs[i][j][1] + atom_type_pairs[i][j][0]
-        self.atom_type_pairs = atom_type_pairs
+
+        # TODO: rewrite self.atom_type_pairs stuff
 
         data = []
         with open(self.outfile_path) as f:
@@ -123,7 +107,8 @@ class TrajectoryMatching:
             self.r = self.ru - shift_to_centre
             self.r = (self.r / shift_to_unit_cell).astype(int) * shift_to_unit_cell
             self.r = self.ru - self.r + shift_to_centre
-        else:
+
+        elif self.system_style == "atomic":
             r_columns = ~ ((self.output_properties[1:] == 'x') | (self.output_properties[1:] == 'y') |
                            (self.output_properties[1:] == 'z'))
             self.r = np.array(np.delete(data, r_columns, axis=2))
@@ -191,12 +176,28 @@ class TrajectoryMatching:
         print("Preparing input\t", end="")
         t_ = time.time()
 
-        unique_type_pairs = np.ravel(np.array(self.atom_type_pairs))
-        self.unique_type_pairs = np.unique(unique_type_pairs)
+        atom_types, atom_types_dict, id = [], {}, 0
+        for row in self.data[0]:
+            mass = np.round(row[0], 2)
+            if mass not in list(atom_types_dict.keys()):
+                id += 1
+                atom_types_dict[mass] = str(id)
+                atom_types.append(atom_types_dict[mass])
+            else:
+                atom_types.append(atom_types_dict[mass])
+        atom_type_pairs = np.array(np.meshgrid(atom_types, atom_types))
+        atom_type_pairs = np.char.add(atom_type_pairs[0], atom_type_pairs[1]).T
+        for i in range(len(atom_type_pairs)):
+            for j in range(len(atom_type_pairs[i])):
+                if atom_type_pairs[i][j][0] > atom_type_pairs[i][j][1]:
+                    atom_type_pairs[i][j] = atom_type_pairs[i][j][1] + atom_type_pairs[i][j][0]
+        self.atom_type_pairs = atom_type_pairs
+        self.unique_type_pairs = np.unique(np.ravel(np.array(self.atom_type_pairs)))
 
         vec_packed_t_data = []
         for t in range(len(self.r)):
             vec_packed_t_data.append([self.r[t], self.box_dimensions[t]])
+
         train_features = Pool().map(self._construct_features, vec_packed_t_data)
         train_features = np.swapaxes(train_features, 0, 1)
         x_train = train_features[0]
@@ -237,7 +238,7 @@ class TrajectoryMatching:
         self.weights = np.matmul(norm_inverse, projection)
 
     def predict(self, x):
-        number_of_type_pairs = len(np.unique(np.ravel(np.array(self.atom_type_pairs))))
+        number_of_type_pairs = len(self.unique_type_pairs)
         p = len(self.weights)
         number_of_forces = int(p / number_of_type_pairs)
         Y = []
@@ -248,5 +249,5 @@ class TrajectoryMatching:
                 y = np.zeros(len(x))
             for j in range(len(self.basis_params)):
                 y = y + self.weights[i * number_of_forces + j] * self.basis(x, self.basis_params[j])
-            Y.append(y / 4.184e-4)
-        return Y  # ` unit conversion from kcal
+            Y.append(y / 4.184e-4) # ` unit conversion from kcal
+        return Y
