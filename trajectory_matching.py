@@ -39,7 +39,6 @@ class TrajectoryMatching:
         print("Reading data\t", end="")
         t_ = time.time()
 
-        # Gather information
         t = -1
         output_timestep = 0
         output_properties = []
@@ -57,8 +56,6 @@ class TrajectoryMatching:
                     if line[0] == "ITEM:" and line[1] == "ATOMS":
                         output_properties = np.array(line[2:])
                         self.output_properties = output_properties
-
-        # TODO: rewrite self.atom_type_pairs stuff
 
         data = []
         with open(self.outfile_path) as f:
