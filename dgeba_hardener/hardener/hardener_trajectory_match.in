@@ -38,7 +38,7 @@ thermo_style	custom step temp press vol density
 run_style	verlet
 
 thermo		1000
-run		400#000
+run		400000
 
 #unfix 		1
 #fix		1 all nve
@@ -46,11 +46,11 @@ run		400#000
 
 #dump 		pos all xyz 1 lj.xyz
 
-dump		2 all custom 5 hardener_trajectory_match_short.out id mass mol x y z xu yu zu
+dump		2 all custom 5 hardener_trajectory_match.out id mass mol x y z xu yu zu
 #dump_modify	2 sort id  
 #dump_modify	2 format line "%d %.2f %.12f %.12f %.12f %.12f %.12f %.12f"
 
-run		75#00
+run		7500
 
 
 # 4) Misc

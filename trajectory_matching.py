@@ -35,8 +35,6 @@ class TrajectoryMatching:
         self.target_vector = []
         self.weights = []
 
-        self.debug = []
-
     def read_data(self):
         print("Reading data\t", end="")
         t_ = time.time()
@@ -101,8 +99,6 @@ class TrajectoryMatching:
             shift_to_centre = np.swapaxes(shift_to_centre, 0, 1)
             shift_to_unit_cell = np.repeat([np.array(self.box_dimensions)], np.array(self.data).shape[1], axis=0)
             shift_to_unit_cell = np.swapaxes(shift_to_unit_cell, 0, 1)
-
-            self.debug = shift_to_centre
 
             self.r = self.ru - shift_to_centre
             self.r = (self.r / shift_to_unit_cell).astype(int) * shift_to_unit_cell
