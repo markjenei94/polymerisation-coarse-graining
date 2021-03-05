@@ -1,12 +1,13 @@
 import numpy as np
 import time
 from multiprocessing import Pool
+from multiprocessing import freeze_support
 
 
 class TrajectoryMatching:
 
     def __init__(self, outfile_path, simulation_timestep, cutoff, basis, basis_parameters,
-                 every_n_from_output=1, timesteps_in_fit=100, system_style='atomic'):
+                 every_n_from_output=1, timesteps_in_fit=100, system_style='atomic', op_sys='Linux'):
 
         self.t = every_n_from_output
         self.n = timesteps_in_fit
@@ -29,6 +30,8 @@ class TrajectoryMatching:
             raise ValueError("'system_style' most be either 'atomic' or 'molecular'")
         else:
             self.system_style = system_style
+        self.op_sys = op_sys
+
         self.read_data()
 
         self.feature_matrix_t = []
@@ -88,7 +91,12 @@ class TrajectoryMatching:
         self.data = np.array(data)
         if self.system_style == "molecular":
             mol_ids = np.unique(self.data[:, :, int(np.where(output_properties[1:] == 'mol')[0])])
-            reduced_data = Pool().map(self._reduce_to_centre_of_mass, mol_ids)
+            if self.op_sys == "Linux" or self.op_sys == "UNIX" or self.op_sys == "L":
+                reduced_data = Pool().map(self._reduce_to_centre_of_mass, mol_ids)
+            else:
+                reduced_data = []
+                for id in mol_ids:
+                    reduced_data.append(self._reduce_to_centre_of_mass(id))
             self.data = np.swapaxes(np.array(reduced_data), 0, 1)
             self.ru = self.data[:, :, 1:4]
 
@@ -98,28 +106,33 @@ class TrajectoryMatching:
             shift_to_unit_cell = np.swapaxes(shift_to_unit_cell, 0, 1)
 
             self.r = self.ru - shift_to_centre
-            self.r = (self.r / shift_to_unit_cell).astype(int) * shift_to_unit_cell
-            self.r = self.ru - self.r + shift_to_centre
+            self.r = np.floor(self.r / shift_to_unit_cell) * shift_to_unit_cell
+            self.r = self.ru - self.r
 
         elif self.system_style == "atomic":
-            r_columns = ~ ((self.output_properties[1:] == 'x') | (self.output_properties[1:] == 'y') |
-                           (self.output_properties[1:] == 'z'))
+            r_columns =  np.nonzero( ~ ((self.output_properties[1:] == 'x') | (self.output_properties[1:] == 'y') |
+                           (self.output_properties[1:] == 'z')))
             self.r = np.array(np.delete(data, r_columns, axis=2))
-            ru_columns = ~ ((self.output_properties[1:] == 'xu') | (self.output_properties[1:] == 'yu') |
-                            (self.output_properties[1:] == 'zu'))
+            ru_columns = np.nonzero( ~ ((self.output_properties[1:] == 'xu') | (self.output_properties[1:] == 'yu') |
+                            (self.output_properties[1:] == 'zu')))
             self.ru = np.array(np.delete(data, ru_columns, axis=2))
 
-        v = (self.ru[1:] - self.ru[:-1]) / self.timestep
+        d = self.r[1:] - self.r[:-1]
+        box_dimensions = np.repeat([np.array(self.box_dimensions)], np.array(self.data).shape[1], axis=0)
+        box_dimensions = np.swapaxes(box_dimensions, 0, 1)[1:]
+        d = np.where(np.abs(d) >= 0.5 * box_dimensions, d - np.sign(d) * box_dimensions, d)
+
+        v = d / self.timestep
         self.a = (v[1:] - v[:-1]) / self.timestep
 
         print(np.round(time.time() - t_, 2), "s")
 
     def _reduce_to_centre_of_mass(self, mol_id):
         data = self.data
-        data = data[np.where(data[:, :, 1] == mol_id)]
+        data = data[data[:, :, 1] == mol_id]
         data = np.reshape(data, (np.array(self.data).shape[0], -1, data.shape[-1]))
-        columns = ~ ((self.output_properties[1:] == 'mass') | (self.output_properties[1:] == 'xu') | (
-                self.output_properties[1:] == 'yu') | (self.output_properties[1:] == 'zu'))
+        columns = np.nonzero( ~ ((self.output_properties[1:] == 'mass') | (self.output_properties[1:] == 'xu') | (
+                self.output_properties[1:] == 'yu') | (self.output_properties[1:] == 'zu')))
         data = np.delete(data, columns, axis=2)
 
         m = np.sum(data[0], axis=0)[0]
@@ -191,7 +204,12 @@ class TrajectoryMatching:
         for t in range(len(self.r)):
             vec_packed_t_data.append([self.r[t], self.box_dimensions[t]])
 
-        train_features = Pool().map(self._construct_features, vec_packed_t_data)
+        if self.op_sys == "Linux" or self.op_sys == "UNIX" or self.op_sys == "L":
+            train_features = Pool().map(self._construct_features, vec_packed_t_data)
+        else:
+            train_features = []
+            for input in vec_packed_t_data:
+                train_features.append(self._construct_features(input))
         train_features = np.swapaxes(train_features, 0, 1)
         x_train = train_features[0]
         y_train = train_features[1]

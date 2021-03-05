@@ -5,8 +5,9 @@ import matplotlib.pyplot as plt
 def plot_1component(x, y_fit, y=False, output_path=False, thermostat='NpT'):
 
     fig, ax = plt.subplots(1, 1)
-    if y:
+    if y is not False:
         ax.plot(x, y, label='true', lw=2.5, color='xkcd:azure')
+    ax.axhline(0, ls='--', color='xkcd:light grey')
     ax.plot(x, y_fit, label='fit', ls='-.', lw=2., color='xkcd:bright orange')
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -28,6 +29,7 @@ def plot_2component(X, Y_fit, Y=np.empty(0), output_path=False, thermostat='NpT'
     for force in [0, 1, 2]:
         if len(Y) > 0:
             ax[i].plot(X[force], Y[force], label='true', lw=2.5, color='xkcd:azure')
+        ax[i].axhline(0, ls='--', color='xkcd:light grey')
         ax[i].plot(X[force], Y_fit[force], label='fit', ls='-.', lw=2., color='xkcd:bright orange')
         ax[i].spines["top"].set_visible(False)
         ax[i].spines["right"].set_visible(False)

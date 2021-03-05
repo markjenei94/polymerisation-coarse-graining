@@ -37,8 +37,8 @@ thermo_style	custom step temp press vol density
 
 run_style	verlet
 
-thermo		1000
-run		400000
+thermo		100
+run		4000	#00
 
 #unfix 		1
 #fix		1 all nve
@@ -46,9 +46,13 @@ run		400000
 
 #dump 		pos all xyz 1 lj.xyz
 
+#	compute 	cc1 all chunk/atom molecule
+#	compute 	myChunk all com/chunk cc1
+#	fix 		com all ave/time 5 1 5 c_myChunk[*] file trajectory_match_com.out mode vector
+
 dump		2 all custom 5 hardener_trajectory_match.out id mass mol x y z xu yu zu
-#dump_modify	2 sort id  
-#dump_modify	2 format line "%d %.2f %.12f %.12f %.12f %.12f %.12f %.12f"
+dump_modify	2 sort id  
+dump_modify	2 format line "%d %.2f %d %.12f %.12f %.12f %.12f %.12f %.12f"
 
 run		7500
 
