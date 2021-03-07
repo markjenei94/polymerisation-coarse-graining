@@ -1,7 +1,5 @@
 /venv/
-/lj_test/test.ipynb
 **/log.lammps
-*log.lammps
 /dgeba_hardener/hardener/hardener_test.data
 /dgeba_hardener/hardener/hardener_trajectory_match.out
 /dgeba_hardener/hardener/hardener_trajectory_match_test.out
