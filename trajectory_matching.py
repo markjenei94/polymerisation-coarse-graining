@@ -1,5 +1,6 @@
 import numpy as np
 import time
+import itertools
 from multiprocessing import Pool
 from multiprocessing import freeze_support
 
@@ -246,7 +247,32 @@ class TrajectoryMatching:
         projection = np.matmul(feature_matrix, target_vector)
         norm = np.matmul(feature_matrix, feature_matrix.T)
         norm_inverse = np.linalg.inv(norm)
-        self.weights = np.matmul(norm_inverse, projection)
+        self.weights = np.matmul(norm_inverse, projection) / 4.184e-4  # ` unit conversion from kcal
+
+    def best_subset(self, k_list, x):
+        original_weights = np.array(self.weights).copy()
+        original_params = self.basis_params
+        y_target = self.predict(x)
+        RSS = {}
+        weights = {}
+        for k in k_list:
+            for params in itertools.combinations(self.basis_params, k):
+                X = []
+                for param in params:
+                    X.append(self.basis(x, param))
+                X = np.array(X)
+                projection = np.matmul(X, y_target)
+                norm = np.matmul(X, X.T)
+                norm_inverse = np.linalg.inv(norm)
+                w = np.matmul(norm_inverse, projection)
+                weights[tuple(params)] = w
+                self.weights = w
+                self.basis_params = params
+                RSS[tuple(params)] = np.sqrt(np.sum((self.predict(x) * 4.184e-4 - y_target) ** 2)) / float(len(x))
+
+        self.basis_params = original_params
+        self.weights = original_weights
+        return weights, RSS
 
     def predict(self, x):
         number_of_type_pairs = len(self.unique_type_pairs)
@@ -260,5 +286,8 @@ class TrajectoryMatching:
                 y = np.zeros(len(x))
             for j in range(len(self.basis_params)):
                 y = y + self.weights[i * number_of_forces + j] * self.basis(x, self.basis_params[j])
-            Y.append(y / 4.184e-4) # ` unit conversion from kcal
-        return Y
+            Y.append(y)
+        if number_of_type_pairs == 1:
+            return np.array(Y[0])
+        else:
+            return Y

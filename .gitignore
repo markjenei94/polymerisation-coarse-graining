@@ -4,3 +4,5 @@
 /dgeba_hardener/hardener/hardener_trajectory_match.out
 /dgeba_hardener/hardener/hardener_trajectory_match_test.out
 /dgeba_hardener/epoxy/epoxy_trajectory_match_test.out
+**/*.restart
+/dgeba_hardener/melt/melt_trajectory_match_test.out
