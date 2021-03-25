@@ -1,8 +1,10 @@
 import numpy as np
 import time
 import itertools
+import matplotlib.pyplot as plt
+from sklearn import linear_model
 from multiprocessing import Pool
-from multiprocessing import freeze_support
+from misc import plot_1component
 
 
 class TrajectoryMatching:
@@ -27,6 +29,7 @@ class TrajectoryMatching:
         self.r = []
         self.ru = []
         self.a = []
+        self.f = []
         if system_style not in ["atomic", "molecular"]:
             raise ValueError("'system_style' most be either 'atomic' or 'molecular'")
         else:
@@ -35,7 +38,7 @@ class TrajectoryMatching:
 
         self.read_data()
 
-        self.feature_matrix_t = []
+        self.feature_matrix = []
         self.target_vector = []
         self.weights = []
 
@@ -111,12 +114,15 @@ class TrajectoryMatching:
             self.r = self.ru - self.r
 
         elif self.system_style == "atomic":
-            r_columns =  np.nonzero( ~ ((self.output_properties[1:] == 'x') | (self.output_properties[1:] == 'y') |
-                           (self.output_properties[1:] == 'z')))
+            r_columns = np.nonzero(~ ((self.output_properties[1:] == 'x') | (self.output_properties[1:] == 'y') |
+                                      (self.output_properties[1:] == 'z')))
             self.r = np.array(np.delete(data, r_columns, axis=2))
-            ru_columns = np.nonzero( ~ ((self.output_properties[1:] == 'xu') | (self.output_properties[1:] == 'yu') |
-                            (self.output_properties[1:] == 'zu')))
+            ru_columns = np.nonzero(~ ((self.output_properties[1:] == 'xu') | (self.output_properties[1:] == 'yu') |
+                                       (self.output_properties[1:] == 'zu')))
             self.ru = np.array(np.delete(data, ru_columns, axis=2))
+            f_columns = np.nonzero(~ ((self.output_properties[1:] == 'fx') | (self.output_properties[1:] == 'fy') |
+                                       (self.output_properties[1:] == 'fz')))
+            self.f = np.array(np.delete(data, f_columns, axis=2))
 
         d = self.r[1:] - self.r[:-1]
         box_dimensions = np.repeat([np.array(self.box_dimensions)], np.array(self.data).shape[1], axis=0)
@@ -132,7 +138,7 @@ class TrajectoryMatching:
         data = self.data
         data = data[data[:, :, 1] == mol_id]
         data = np.reshape(data, (np.array(self.data).shape[0], -1, data.shape[-1]))
-        columns = np.nonzero( ~ ((self.output_properties[1:] == 'mass') | (self.output_properties[1:] == 'xu') | (
+        columns = np.nonzero(~ ((self.output_properties[1:] == 'mass') | (self.output_properties[1:] == 'xu') | (
                 self.output_properties[1:] == 'yu') | (self.output_properties[1:] == 'zu')))
         data = np.delete(data, columns, axis=2)
 
@@ -179,7 +185,7 @@ class TrajectoryMatching:
 
         return [x_train, y_train, z_train]
 
-    def prepare_training_data(self):
+    def prepare_training_data(self, method="bayesian"):
         print("Preparing input\t", end="")
         t_ = time.time()
 
@@ -224,55 +230,106 @@ class TrajectoryMatching:
         m = np.ravel(list([self.data[0, :, 0]]) * 3)
         target_vector = target_vector * m
 
-        self.feature_matrix_t = feature_matrix_t
-        self.target_vector = target_vector
-
-        print(np.round(time.time() - t_, 2), "s")
-
-    def regress(self, method='simple'):
-        feature_matrix = []
-        target_vector = []
         if method == 'simple':
-            feature_matrix = np.swapaxes(self.feature_matrix_t, 0, 1)
-            feature_matrix = np.reshape(feature_matrix, (np.size(feature_matrix, axis=0),
-                                                         np.size(feature_matrix, axis=1) * np.size(
-                                                             feature_matrix, axis=2)))
-            target_vector = np.ravel(self.target_vector)
+            feature_matrix_t = np.swapaxes(feature_matrix_t, 0, 1)
+            feature_matrix_t = np.reshape(feature_matrix_t, (np.size(feature_matrix_t, axis=0),
+                                                             np.size(feature_matrix_t, axis=1) * np.size(
+                                                                 feature_matrix_t, axis=2)))
+            target_vector = np.ravel(target_vector)
 
         if method == "bayesian":
-            feature_matrix = np.swapaxes(self.feature_matrix_t, 0, 1)
-            feature_matrix = np.sum(feature_matrix, axis=1)
-            target_vector = np.sum(self.target_vector, axis=0)
+            feature_matrix_t = np.swapaxes(feature_matrix_t, 0, 1)
+            feature_matrix_t = np.sum(feature_matrix_t, axis=1)
+            target_vector = np.sum(target_vector, axis=0)
 
-        projection = np.matmul(feature_matrix, target_vector)
-        norm = np.matmul(feature_matrix, feature_matrix.T)
-        norm_inverse = np.linalg.inv(norm)
-        self.weights = np.matmul(norm_inverse, projection) / 4.184e-4  # ` unit conversion from kcal
+        self.feature_matrix = feature_matrix_t.T
+        self.target_vector = target_vector
 
-    def best_subset(self, k_list, x):
+        print(np.round(time.time() - t_, 2), "s\n")
+
+    def fit(self, method='ElasticNet', alpha=1e-6, l1_ratio=0.75):
+
+        if method == "simple":
+            projection = np.matmul(np.array(self.feature_matrix).T, self.target_vector)
+            norm = np.matmul(np.array(self.feature_matrix).T, np.array(self.feature_matrix))
+            norm_inverse = np.linalg.inv(norm)
+            self.weights = np.matmul(norm_inverse, projection) / 4.184e-4  # ` unit conversion from kcal
+
+        elif method == "Ridge":
+            regressor = linear_model.Ridge(alpha=alpha, fit_intercept=True, normalize=True, max_iter=10000)
+            regressor.fit(self.feature_matrix, self.target_vector)
+            self.weights = regressor.coef_ / 4.184e-4
+        elif method == "Lasso":
+            regressor = linear_model.Lasso(alpha=alpha, fit_intercept=True, normalize=True, max_iter=10000)
+            regressor.fit(self.feature_matrix, self.target_vector)
+            self.weights = regressor.coef_ / 4.184e-4
+        else:
+            regressor = linear_model.ElasticNet(alpha=alpha, l1_ratio=l1_ratio, fit_intercept=True, normalize=True, max_iter=10000)
+            regressor.fit(self.feature_matrix, self.target_vector)
+            self.weights = regressor.coef_ / 4.184e-4
+
+    def best_subset(self, k_list, x, center_y=False, print_coeffs=False):
         original_weights = np.array(self.weights).copy()
-        original_params = self.basis_params
+        original_params = np.array(self.basis_params).copy()
         y_target = self.predict(x)
+        if center_y:
+            y_target -= y_target[-1]
         RSS = {}
         weights = {}
-        for k in k_list:
-            for params in itertools.combinations(self.basis_params, k):
-                X = []
-                for param in params:
-                    X.append(self.basis(x, param))
-                X = np.array(X)
-                projection = np.matmul(X, y_target)
-                norm = np.matmul(X, X.T)
-                norm_inverse = np.linalg.inv(norm)
-                w = np.matmul(norm_inverse, projection)
-                weights[tuple(params)] = w
-                self.weights = w
-                self.basis_params = params
-                RSS[tuple(params)] = np.sqrt(np.sum((self.predict(x) * 4.184e-4 - y_target) ** 2)) / float(len(x))
+        if type(k_list) == tuple:
+            X = []
+            for param in k_list:
+                X.append(self.basis(x, param))
+            X = np.array(X)
+            projection = np.matmul(X, y_target)
+            norm = np.matmul(X, X.T)
+            norm_inverse = np.linalg.inv(norm)
+            w = np.matmul(norm_inverse, projection)
+            weights[tuple(k_list)] = w
+            self.weights = w
+            self.basis_params = k_list
+            RSS[tuple(k_list)] = np.sqrt(np.sum((self.predict(x) - y_target / 4.184e-4) ** 2)) / float(len(x))
+        elif type(k_list) == int:
+            k_list = [k_list]
+
+        if len(weights) == 0:
+            for k in k_list:
+                for params in itertools.combinations(original_params, k):
+                    X = []
+                    for param in params:
+                        X.append(self.basis(x, param))
+                    X = np.array(X)
+                    projection = np.matmul(X, y_target)
+                    norm = np.matmul(X, X.T)
+                    norm_inverse = np.linalg.inv(norm)
+                    w = np.matmul(norm_inverse, projection)
+                    weights[tuple(params)] = w
+                    self.weights = w
+                    self.basis_params = params
+                    RSS[tuple(params)] = np.sqrt(np.sum((self.predict(x) - y_target / 4.184e-4) ** 2)) / float(len(x))
+
+        RSS = dict(sorted(RSS.items(), key=lambda item: item[1]))
+        key = list(RSS.keys())[0]
+
+        self.weights = weights[key]
+        self.basis_params = np.array(key)
+        y_fit_ = self.predict(x)
+        if len(y_target) == len(x):
+            plot_1component(x, y_fit_, y_target, labels=["TM fit", "reduced parameter set"])
+        else:
+            plot_1component(x, y_fit_, labels=["TM fit"])
+
+        if print_coeffs:
+            print("pair_coeff\t1 1 ", end='')
+            for p in range(0, -15, -1):
+                if p in self.basis_params:
+                    print(self.weights[self.basis_params == p][0], end='  ')
+                else:
+                    print('0 ', end='  ')
+            print('\n')
 
         self.basis_params = original_params
         self.weights = original_weights
-        return weights, RSS
 
     def predict(self, x):
         number_of_type_pairs = len(self.unique_type_pairs)
