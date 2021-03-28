@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import math
+from scipy.linalg import solve
 
 
 def plot_1component(x, y_fit, y=False, output_path=False, thermostat='NpT', title="Fitted force function",
@@ -44,3 +46,28 @@ def plot_2component(X, Y_fit, Y=np.empty(0), output_path=False, thermostat='NpT'
 
     if output_path:
         plt.savefig(output_path, bbox_inches='tight')
+
+def lowess(y, f=0.01, iter=1):
+    x = np.arange(0, len(y), 1)
+    n = len(y)
+    r = int(math.ceil(f * n))
+    h = [np.sort(np.abs(x - x[i]))[r] for i in range(n)]
+    w = np.clip(np.abs((x[:, None] - x[None, :]) / h), 0.0, 1.0)
+    w = (1 - w ** 3) ** 3
+    yest = np.zeros(n)
+    delta = np.ones(n)
+    for iteration in range(iter):
+        for i in range(n):
+            weights = delta * w[:, i]
+            b = np.array([np.sum(weights * y), np.sum(weights * y * x)])
+            A = np.array([[np.sum(weights), np.sum(weights * x)],
+                          [np.sum(weights * x), np.sum(weights * x * x)]])
+            beta = solve(A, b)
+            yest[i] = beta[0] + beta[1] * x[i]
+
+        residuals = y - yest
+        s = np.median(np.abs(residuals))
+        delta = np.clip(residuals / (6.0 * s), -1, 1)
+        delta = (1 - delta ** 2) ** 2
+
+    return yest

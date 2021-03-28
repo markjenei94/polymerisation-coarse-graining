@@ -5,6 +5,7 @@
 /dgeba_hardener/hardener/hardener_trajectory_match_test.out
 /dgeba_hardener/epoxy/epoxy_trajectory_match_test.out
 **/*.restart
+**/*.data
 /dgeba_hardener/melt/melt_trajectory_match_test.out
 /bayesian_parametrisaiton.pdf
 /multi_t_bayesian.pdf
