@@ -13,8 +13,6 @@ class TrajectoryMatching:
     def __init__(self, outfile_path, basis, basis_parameters, simulation_timestep=1, cutoff=20,
                  every_n_from_output=1, timesteps_in_fit=100, system_style='atomic', reform_data=False, op_sys='Linux'):
 
-        self.debug_target_vector = []
-
         self.t = every_n_from_output
         self.n = timesteps_in_fit
         self.outfile_path = outfile_path
@@ -270,7 +268,7 @@ class TrajectoryMatching:
 
         print(np.round(time.time() - t_, 2), "s")
 
-    def fit(self, method='ElasticNet', alpha=1e-6, l1_ratio=0.75):
+    def fit(self):
         t_ = time.time()
         print("Fitting\t", end='')
         projections = []
