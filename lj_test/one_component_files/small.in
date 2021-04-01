@@ -37,9 +37,9 @@ neigh_modify    delay 10 every 1
 #			 #
 ########	 #########
 
-fix 		1 all npt temp 373.0 373.0 25.0 iso 1.0 1.0  10.0
+fix 		1 all npt temp 303.0 303.0 25.0 iso 1.0 1.0  10.0
 
-velocity	all create 373.0 199085 mom no
+velocity	all create 303.0 199085 mom no
 
 timestep	0.5
 
@@ -56,7 +56,7 @@ run		4000000
 #run 		2000000
 
 
-dump		2 all custom 20 small_npt.out id mass x y z xu yu zu fx fy fz
+dump		2 all custom 20 small_npt_cold.out id mass x y z xu yu zu fx fy fz
 dump_modify	2 sort id
 dump_modify	2 format line "%d %.2f %.12f %.12f %.12f %.12f %.12f %.12f %.12f %.12f %.12f"
 

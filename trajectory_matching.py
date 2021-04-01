@@ -3,7 +3,6 @@ import time
 import itertools
 import os
 import json
-import scipy
 from multiprocessing import Pool
 from misc import plot_1component
 
@@ -59,7 +58,10 @@ class TrajectoryMatching:
             self.timestep *= packed_data[4]
             self.timestep_one *= packed_data[4]
         else:
-            print("Writing data")
+            if reform:
+                print("Writing data")
+            else:
+                print("Reading data")
             data = []
             box_lo = []
             output_timestep = 0
@@ -102,6 +104,8 @@ class TrajectoryMatching:
                             self.box_dimensions.append(dimensions)
                     elif len(line) == len(output_properties):
                         data[-1].append(list(np.array(line).astype(float))[1:])
+                    if t == 1000:
+                        break
 
             if reform:
                 with open(rootname + ".data", 'w') as f:
@@ -117,9 +121,10 @@ class TrajectoryMatching:
         return np.convolve(force, weights, mode='valid')
 
     def _reduce_to_centre_of_mass(self, mol_id):
-        data = self.data
+        data = np.array(self.data[::self.t][:self.n])
+        n = data.shape[0]
         data = data[data[:, :, 1] == mol_id]
-        data = np.reshape(data, (np.array(self.data).shape[0], -1, data.shape[-1]))
+        data = np.reshape(data, (n, -1, data.shape[-1]))
         columns = np.nonzero(~ ((self.output_properties[1:] == 'mass') | (self.output_properties[1:] == 'xu') | (
                 self.output_properties[1:] == 'yu') | (self.output_properties[1:] == 'zu')))
         data = np.delete(data, columns, axis=2)
@@ -268,14 +273,79 @@ class TrajectoryMatching:
 
         print(np.round(time.time() - t_, 2), "s")
 
-    def fit(self):
+    def b_matrix(self, t):
+
+        t = t + 1
+        cutoff = self.cutoff
+        r_t = self.r[t]
+
+
+        box_dimensions = self.box_dimensions[::self.t][:self.n][t]
+        box_dimensions = box_dimensions.reshape((1, 3))
+        box_dimensions = np.repeat(box_dimensions, self.r.shape[1], axis=0)
+        box_dimensions = box_dimensions.reshape((self.r.shape[1], 1, 3))
+        box_dimensions = np.repeat(box_dimensions, self.r.shape[1], axis=1)
+
+        r_rel = r_t[:, np.newaxis, :] - r_t[np.newaxis, :, :]
+        r_rel = np.where(np.abs(r_rel) >= 0.5 * box_dimensions, r_rel - np.sign(r_rel) * box_dimensions, r_rel)
+        r_rel = r_rel ** 2
+        r_rel = np.sum(r_rel, axis=2)
+        r_rel = np.sqrt(r_rel)
+        coeff = (1 - r_rel / cutoff) ** 2
+        coeff = np.where(np.abs(r_rel) >= cutoff, 0, coeff)
+        coeff = np.where(r_rel == 0, 0, coeff)
+
+        a = coeff.shape[0]
+        coeff_blocks = np.zeros((a * 3, a * 3))
+        for i in [0, 1, 2]:
+            coeff_blocks[i * a:(i + 1) * a, i * a:(i + 1) * a] = coeff[:]
+
+        coeff_blocks = coeff_blocks
+        coeff_diag = - np.sum(coeff_blocks, axis=0).reshape((1, -1))
+        coeff_diag = np.repeat(coeff_diag, coeff_diag.shape[1], axis=0)
+        identity = np.eye(coeff_diag.shape[1]).reshape((coeff_diag.shape[1], -1))
+        coeff_diag = - coeff_diag * identity
+
+        b_matrix_t = coeff_blocks + coeff_diag
+
+        return b_matrix_t
+
+    def fit_core(self, t):
+        method = ''
+        target_vector_t = self.target_vector[t]
+        if method == 'nve':
+            norm = np.matmul(self.feature_matrix[t], self.feature_matrix[t].T)
+            projection = np.matmul(self.feature_matrix[t], target_vector_t)
+        else:
+            b_matrix = self.b_matrix(t)
+            b_matrix_t_pinv = np.linalg.pinv(b_matrix)
+            norm = np.matmul(b_matrix_t_pinv, self.feature_matrix[t].T)
+            norm = np.matmul(self.feature_matrix[t], norm)
+            projection = np.matmul(b_matrix_t_pinv, target_vector_t)
+            projection = np.matmul(self.feature_matrix[t], projection)
+
+        return [norm, projection]
+
+    def fit(self, method=''):
         t_ = time.time()
         print("Fitting\t", end='')
+
         projections = []
         norms = []
-        for idx, feature_matrix in enumerate(self.feature_matrix):
-            norms.append(np.matmul(feature_matrix, feature_matrix.T))
-            projections.append(np.matmul(feature_matrix, self.target_vector[idx]))
+        # For some reason, pooling works slower here
+        '''if self.op_sys == "Linux" or self.op_sys == "UNIX" or self.op_sys == "L":
+            t = range(self.feature_matrix.shape[0])
+            norm_projection = Pool().map(self.fit_core, t)
+
+            norms = []
+            projections = []
+            for idx, res in enumerate(norm_projection):
+                norms.append(np.array(norm_projection[idx][0]))
+                projections.append(np.array(norm_projection[idx][1]))'''
+        for t, feature_matrix_t in enumerate(self.feature_matrix):
+            norm_projection = self.fit_core(t)
+            norms.append(np.array(norm_projection[0]))
+            projections.append(np.array(norm_projection[1]))
 
         projections, norms = np.array(projections), np.array(norms)
         projection = np.sum(projections, axis=0)
