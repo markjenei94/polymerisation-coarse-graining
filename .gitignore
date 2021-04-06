@@ -10,6 +10,6 @@
 /reading-list/bayesian_parametrisaiton.pdf
 /reading-list/multi_t_bayesian.pdf
 /reading-list/polymer_bayesian.pdf
-/lj_test/one_component_files/heavy_npt.out
-/lj_test/one_component_files/lj_test_gamma_demo.out
-/lj_test/one_component_files/small_npt.out
+/lj_test/trajectory_match/heavy_npt.out
+/lj_test/trajectory_match/lj_test_gamma_demo.out
+/lj_test/trajectory_match/small_npt.out
