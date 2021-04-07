@@ -5,7 +5,7 @@ from scipy.linalg import solve
 
 
 def plot_1component(x, y_fit, y=False, output_path=False, thermostat='NpT', title="Fitted force function",
-                    labels=("true", "fit")):
+                    labels=("true", "fit"), y_label=r"$f_{ij}$"):
     fig, ax = plt.subplots(1, 1)
     if y is not False:
         ax.plot(x, y, label=f"{labels[0]}", lw=2.5, color='xkcd:azure')
@@ -17,7 +17,7 @@ def plot_1component(x, y_fit, y=False, output_path=False, thermostat='NpT', titl
     ax.spines["left"].set_visible(False)
     ax.set_title(f"{title} ({thermostat})")
     ax.set_xlabel(r"$r_{ij}$", fontsize=15)
-    ax.set_ylabel(r"$f_{ij}$", fontsize=15)
+    ax.set_ylabel(y_label, fontsize=15)
     ax.legend(frameon=False)
 
     if output_path:

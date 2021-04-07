@@ -1,8 +1,6 @@
 import numpy as np
 import time
 import itertools
-import os
-import json
 from multiprocessing import Pool
 from misc import plot_1component
 
@@ -251,11 +249,9 @@ class TrajectoryMatching:
         print(np.round(time.time() - t_, 2), "s")
 
     def b_matrix(self, t):
-
-        t = t + 1
+        t = t + 1  # due to how 'v' is calculated
         cutoff = self.cutoff
         r_t = self.r[t]
-
 
         box_dimensions = self.box_dimensions[t]
         box_dimensions = box_dimensions.reshape((1, 3))
@@ -332,7 +328,7 @@ class TrajectoryMatching:
 
         print(np.round(time.time() - t_, 2), 's')
 
-    def fit_gamma(self, T):
+    def fit_gamma(self, T=273):
         if len(self.weights) == 0:
             raise RuntimeError("Run fit() first")
         print("Fitting gamma\t", end='')
@@ -361,7 +357,7 @@ class TrajectoryMatching:
         print(np.round(time.time() - t_, 2),'s')
         return np.roots([gamma_2, gamma_1, gamma_0])[1]
 
-    def best_subset(self, k_list, x, center_y=False, print_coeffs=False):
+    def best_subset(self, k_list, x, center_y=False, print_coeffs=False, plot=False):
         original_weights = np.array(self.weights).copy()
         original_params = np.array(self.basis_params).copy()
         y_target = self.predict(x)
@@ -374,6 +370,8 @@ class TrajectoryMatching:
         if type(k_list) == tuple:
             X = []
             for param in k_list:
+                if param == 0 or param == -1:
+                    Warning("Energy fit might be inaccurate if polynomial basis param is 0 or -1")
                 X.append(self.basis(x, param))
             X = np.array(X)
             projection = np.matmul(X, y_target)
@@ -389,7 +387,13 @@ class TrajectoryMatching:
 
         if len(weights) == 0:
             for k in k_list:
-                for params in itertools.combinations(original_params, k):
+                original_params_ = []
+                for p_ in original_params:
+                    if p_ != 0 and p_ != -1:
+                        original_params_.append(p_)
+                if k > len(original_params_):
+                    k = len(original_params_)
+                for params in itertools.combinations(original_params_, k):
                     X = []
                     for param in params:
                         X.append(self.basis(x, param))
@@ -408,11 +412,12 @@ class TrajectoryMatching:
 
         self.weights = weights[key]
         self.basis_params = np.array(key)
-        y_fit_ = self.predict(x)
-        if len(y_target) == len(x):
-            plot_1component(x, y_fit_, y_target, labels=["TM fit", "reduced parameter set"])
-        else:
-            plot_1component(x, y_fit_, labels=["TM fit"])
+        if plot:
+            y_fit_ = self.predict(x)
+            if len(y_target) == len(x):
+                plot_1component(x, y_target, y_fit_, labels=["reduced parameter set", "TM fit"])
+            else:
+                plot_1component(x, y_fit_, labels=["TM fit"])
 
         if print_coeffs:
             print("pair_coeff\t1 1 ", end='')
@@ -431,6 +436,8 @@ class TrajectoryMatching:
         self.basis_params = original_params
         self.weights = original_weights
 
+        return np.array(key), weights[key]
+
     def predict(self, x):
         number_of_type_pairs = len(self.unique_type_pairs)
         p = len(self.weights)
@@ -448,3 +455,54 @@ class TrajectoryMatching:
             return np.array(Y[0])
         else:
             return Y
+
+    def predict_energy(self, x_fit, x_plot, best_subset_=0):
+        if best_subset_ == 0:
+            best_subset_ = max(2, len(self.basis_params) - 3)
+        pars, weights_ = self.best_subset(best_subset_, x_fit)
+
+        weights = np.zeros(len(self.basis_params))
+        for idx, param in enumerate(pars):
+            weights[self.basis_params == param] += weights_[idx]
+
+        number_of_type_pairs = len(self.unique_type_pairs)
+        p = len(weights)
+        number_of_forces = int(p / number_of_type_pairs)
+        Y = []
+        for i in range(number_of_type_pairs):
+            if type(x_plot) == float:
+                y = 0
+            else:
+                y = np.zeros(len(x_plot))
+            for j, param in enumerate(self.basis_params):
+                w = weights[i * number_of_forces + j]
+                if w == 0:
+                    continue
+                if param == 0:
+                    # continue
+                    y = y + w * x_plot
+                elif param == -1:
+                    # y = y + w * np.log(x)
+                    continue
+                else:
+                    y = y + w / np.abs(param + 1) * x_plot ** (param + 1)
+            Y.append(y)
+        if number_of_type_pairs == 1:
+            return np.array(Y[0])
+        else:
+            return Y
+
+    def write_pair_table(self, energy_fit_x, n, outfile_path='pair.table'):
+        x = np.arange(1, n + 1, 1)
+        x = np.sqrt(x)
+        x *= self.cutoff / x[-1]
+        f = self.predict(x)
+        e = self.predict_energy(energy_fit_x, x, (-7, -13))
+
+        file_ = open(outfile_path, 'w')
+        file_.write("1-1\n")
+        file_.write(f"N {len(x)}\tRSQ {x[0]} {x[-1]}\n\n")
+
+        for idx, x_ in enumerate(x):
+            file_.write(f"{idx + 1} {x_} {e[idx]} {f[idx]}\n")
+        file_.close()
