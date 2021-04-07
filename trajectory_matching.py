@@ -492,12 +492,15 @@ class TrajectoryMatching:
         else:
             return Y
 
-    def write_pair_table(self, energy_fit_x, n, outfile_path='pair.table'):
+    def write_pair_table(self, energy_fit_x, n, outfile_path='pair.table', energy_fit_params=0):
         x = np.arange(1, n + 1, 1)
         x = np.sqrt(x)
         x *= self.cutoff / x[-1]
         f = self.predict(x)
-        e = self.predict_energy(energy_fit_x, x, (-7, -13))
+        if energy_fit_params != 0:
+            e = self.predict_energy(energy_fit_x, x)
+        else:
+            e = self.predict_energy(energy_fit_x, x, energy_fit_params)
 
         file_ = open(outfile_path, 'w')
         file_.write("1-1\n")
