@@ -1,8 +1,12 @@
-import numpy as np
-import time
 import itertools
+import time
 from multiprocessing import Pool
-from misc import plot_1component
+
+import matplotlib.pyplot as plt
+import numpy as np
+from tqdm import tqdm
+
+from misc import plot_1component, radial_distribution_function
 
 
 class TrajectoryMatching:
@@ -25,8 +29,6 @@ class TrajectoryMatching:
         self.box_lo = []
         self.data = []
         self.r = []
-        self.r_smooth = []
-        self.ru = []
         self.v = []
         self.a = []
         self.f = []
@@ -43,7 +45,7 @@ class TrajectoryMatching:
         self.weights = []
 
     def read_data(self):
-        print("Loading data\t", end='')
+        print("loading data\t")
         t_ = time.time()
 
         t = -1
@@ -66,10 +68,13 @@ class TrajectoryMatching:
         self.timestep *= self.t
 
         with open(self.outfile_path) as f:
-            l = len(f.readlines())
+            for l, line in enumerate(f):
+                pass
+        l += 1
 
         with open(self.outfile_path) as f:
             t = -1
+            pbar = tqdm(total=self.n)
             for i in range(l):
                 line = f.readline().split()
                 if len(line) == 2:
@@ -78,6 +83,7 @@ class TrajectoryMatching:
                         if len(self.data) == self.n:
                             break
                         if t % self.t == 0:
+                            pbar.update(1)
                             self.data.append([])
                 elif len(line) == 6 and t % self.t == 0:
                     if line[1] == "BOX":
@@ -91,7 +97,7 @@ class TrajectoryMatching:
                         self.box_dimensions.append(dimensions)
                 elif len(line) == len(output_properties) and t % self.t == 0:
                     self.data[-1].append(np.array(line).astype(float)[1:])
-
+        pbar.close()
         self.box_dimensions = np.array(self.box_dimensions)
         self.data = np.array(self.data)
         self.box_lo = np.array(self.box_lo)
@@ -105,7 +111,7 @@ class TrajectoryMatching:
 
     def _reduce_to_centre_of_mass(self, mol_id):
         data = np.array(self.data)
-        n = data.shape[0]
+        n = np.array(self.data).shape[0]
         data = data[data[:, :, 1] == mol_id]
         data = np.reshape(data, (n, -1, data.shape[-1]))
         columns = np.nonzero(~ ((self.output_properties[1:] == 'mass') | (self.output_properties[1:] == 'xu') | (
@@ -156,7 +162,7 @@ class TrajectoryMatching:
         return [x_train, y_train, z_train]
 
     def prepare_training_data(self):
-        print("Preparing input\t", end="")
+        print("preparing input\t")
         t_ = time.time()
 
         if self.system_style == "atomic":
@@ -166,31 +172,27 @@ class TrajectoryMatching:
 
         if self.system_style == "molecular":
             mol_ids = np.unique(self.data[:, :, int(np.where(self.output_properties[1:] == 'mol')[0])])
-            if self.op_sys == "Linux" or self.op_sys == "UNIX" or self.op_sys == "L":
-                reduced_data = Pool().map(self._reduce_to_centre_of_mass, mol_ids)
-            else:
-                reduced_data = []
-                for id in mol_ids:
-                    reduced_data.append(self._reduce_to_centre_of_mass(id))
+
+            reduced_data = []
+            for id in mol_ids:
+                reduced_data.append(self._reduce_to_centre_of_mass(id))
+
             self.data = np.swapaxes(np.array(reduced_data), 0, 1)
-            self.ru = self.data[:, :, 1:4]
+            ru = self.data[:, :, 1:4]
 
             shift_to_centre = np.repeat([np.array(self.box_lo)], np.array(self.data).shape[1], axis=0)
             shift_to_centre = np.swapaxes(shift_to_centre, 0, 1)
             shift_to_unit_cell = np.repeat([np.array(self.box_dimensions)], np.array(self.data).shape[1], axis=0)
             shift_to_unit_cell = np.swapaxes(shift_to_unit_cell, 0, 1)
 
-            self.r = self.ru - shift_to_centre
+            self.r = ru - shift_to_centre
             self.r = np.floor(self.r / shift_to_unit_cell) * shift_to_unit_cell
-            self.r = self.ru - self.r
+            self.r = ru - self.r
 
         elif self.system_style == "atomic":
             r_columns = np.nonzero(~ ((self.output_properties[1:] == 'x') | (self.output_properties[1:] == 'y') |
                                       (self.output_properties[1:] == 'z')))
             self.r = np.array(np.delete(self.data, r_columns, axis=2))
-            ru_columns = np.nonzero(~ ((self.output_properties[1:] == 'xu') | (self.output_properties[1:] == 'yu') |
-                                       (self.output_properties[1:] == 'zu')))
-            self.ru = np.array(np.delete(self.data, ru_columns, axis=2))
 
         d = self.r[1:] - self.r[:-1]
 
@@ -221,7 +223,7 @@ class TrajectoryMatching:
         self.unique_type_pairs = np.unique(np.ravel(np.array(self.atom_type_pairs)))
 
         vec_packed_t_data = []
-        for t in range(len(self.r)):
+        for t in tqdm(range(len(self.r))):
             vec_packed_t_data.append([self.r[t], self.box_dimensions[t]])
 
         if self.op_sys == "Linux" or self.op_sys == "UNIX" or self.op_sys == "L":
@@ -285,7 +287,7 @@ class TrajectoryMatching:
 
     def fit_core(self, t, method):
         target_vector_t = self.target_vector[t]
-        if method == 'nve':
+        if method == 'nve' or method == 'NVE':
             norm = np.matmul(self.feature_matrix[t], self.feature_matrix[t].T)
             projection = np.matmul(self.feature_matrix[t], target_vector_t)
         else:
@@ -324,9 +326,30 @@ class TrajectoryMatching:
         projection = np.sum(projections, axis=0)
         norm = np.sum(norms, axis=0)
         norm_inverse = np.linalg.inv(norm)
-        self.weights = np.matmul(norm_inverse, projection) # unit conversion to 'LAMMPS real'
+        self.weights = np.matmul(norm_inverse, projection)  # unit conversion to 'LAMMPS real'
 
         print(np.round(time.time() - t_, 2), 's')
+
+    def refit(self, relative_error_filter=10):
+        y = []
+        y_ = []
+        for t, feature_matrix_t in enumerate(self.feature_matrix):
+            y.append(self.target_vector[t])
+            y_.append(np.matmul(feature_matrix_t.T, self.weights))
+        y, y_ = np.array(y), np.array(y_)
+
+        y_diff = np.fabs(y_ - y) / np.fabs(y)
+
+        outliers = np.array(np.nonzero(y_diff > relative_error_filter)).T
+        print(f"Removed {len(outliers)}(/{np.prod(y_diff.shape)}) outliers")
+
+        for outlier in outliers:
+            t = outlier[0]
+            x_ = outlier[1]
+            self.feature_matrix[t, :, x_] = 0
+            self.target_vector[t][x_] = 0
+
+        self.fit()
 
     def fit_gamma(self, T=273):
         if len(self.weights) == 0:
@@ -354,7 +377,7 @@ class TrajectoryMatching:
         gamma_0, gamma_2 = -gamma_0 / n, gamma_2 / n
         gamma_1 = 3 * 2 * self.r.shape[1] * k * T / (self.timestep)
 
-        print(np.round(time.time() - t_, 2),'s')
+        print(np.round(time.time() - t_, 2), 's')
         return np.roots([gamma_2, gamma_1, gamma_0])[1]
 
     def best_subset(self, k_list, x, center_y=False, print_coeffs=False, plot=False):
@@ -389,7 +412,7 @@ class TrajectoryMatching:
             for k in k_list:
                 original_params_ = []
                 for p_ in original_params:
-                    if p_ != 0 and p_ != -1:
+                    if p_ != 0 and p_ != -1 and p_ >= -15:
                         original_params_.append(p_)
                 if k > len(original_params_):
                     k = len(original_params_)
@@ -509,3 +532,28 @@ class TrajectoryMatching:
         for idx, x_ in enumerate(x):
             file_.write(f"{idx + 1} {x_} {e[idx]} {f[idx]}\n")
         file_.close()
+
+    def plot_rdf(self, r_max=17.5, dr=0.1, plot=True, outfile_path=''):
+        g_list = []
+        radii = []
+        for t in range(len(self.r)):
+            x = self.r[t, :, 0]
+            y = self.r[t, :, 1]
+            z = self.r[t, :, 2]
+            s = np.mean(self.box_dimensions[t])
+            # x, y, z = augment(x, y, z, s)
+            g, radii, indices = radial_distribution_function(x, y, z, s * 3, r_max, dr)
+            g_list.append(g)
+        g_list = np.array(g_list)
+        g_ave = np.mean(g_list, axis=0)
+
+        if plot:
+            fig, ax = plt.subplots()
+            ax.plot(radii, g_ave)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["bottom"].set_visible(False)
+            ax.spines["left"].set_visible(False)
+            if outfile_path != '':
+                plt.savefig(outfile_path, bbox_inches='tight')
+        return radii, g_ave
