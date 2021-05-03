@@ -1,5 +1,4 @@
 import itertools
-import time
 from multiprocessing import Pool
 
 import matplotlib.pyplot as plt
@@ -45,9 +44,6 @@ class TrajectoryMatching:
         self.weights = []
 
     def read_data(self):
-        print("loading data\t")
-        t_ = time.time()
-
         t = -1
         output_timestep = 0
         output_properties = []
@@ -74,7 +70,7 @@ class TrajectoryMatching:
 
         with open(self.outfile_path) as f:
             t = -1
-            pbar = tqdm(total=self.n)
+            pbar = tqdm(total=self.n, desc="loading data")
             for i in range(l):
                 line = f.readline().split()
                 if len(line) == 2:
@@ -101,8 +97,6 @@ class TrajectoryMatching:
         self.box_dimensions = np.array(self.box_dimensions)
         self.data = np.array(self.data)
         self.box_lo = np.array(self.box_lo)
-
-        print(np.round(time.time() - t_, 2), 's')
 
     def average_force(self, force):
         periods = self.t
@@ -161,10 +155,8 @@ class TrajectoryMatching:
 
         return [x_train, y_train, z_train]
 
-    def prepare_training_data(self):
-        print("preparing input\t")
-        t_ = time.time()
-
+    def prepare_training_data(self, only_r=False):
+        print("preparing input")
         if self.system_style == "atomic":
             f_columns = np.nonzero(~ ((self.output_properties[1:] == 'fx') | (self.output_properties[1:] == 'fy') |
                                       (self.output_properties[1:] == 'fz')))
@@ -204,6 +196,9 @@ class TrajectoryMatching:
         self.v = v
         self.a = (v[1:] - v[:-1]) / self.timestep
 
+        if only_r:
+            return
+
         atom_types, atom_types_dict, id = [], {}, 0
         for row in self.data[0]:
             mass = np.round(row[0], 2)
@@ -223,7 +218,7 @@ class TrajectoryMatching:
         self.unique_type_pairs = np.unique(np.ravel(np.array(self.atom_type_pairs)))
 
         vec_packed_t_data = []
-        for t in tqdm(range(len(self.r))):
+        for t in range(len(self.r)):
             vec_packed_t_data.append([self.r[t], self.box_dimensions[t]])
 
         if self.op_sys == "Linux" or self.op_sys == "UNIX" or self.op_sys == "L":
@@ -247,8 +242,6 @@ class TrajectoryMatching:
 
         self.feature_matrix = feature_matrix_t
         self.target_vector = target_vector
-
-        print(np.round(time.time() - t_, 2), "s")
 
     def b_matrix(self, t):
         t = t + 1  # due to how 'v' is calculated
@@ -301,9 +294,6 @@ class TrajectoryMatching:
         return [norm, projection]
 
     def fit(self, method=''):
-        t_ = time.time()
-        print("Fitting\t", end='')
-
         projections = []
         norms = []
         # For some reason, pooling works slower here, probably due some matmul multiprocess
@@ -317,18 +307,19 @@ class TrajectoryMatching:
                 norms.append(np.array(norm_projection[idx][0]))
                 projections.append(np.array(norm_projection[idx][1]))
             else:'''
+        pbar = tqdm(total=len(self.feature_matrix), desc="fitting")
         for t, feature_matrix_t in enumerate(self.feature_matrix):
             norm_projection = self.fit_core(t, method)
             norms.append(np.array(norm_projection[0]))
             projections.append(np.array(norm_projection[1]))
+            pbar.update(1)
+        pbar.close()
 
         projections, norms = np.array(projections), np.array(norms)
         projection = np.sum(projections, axis=0)
         norm = np.sum(norms, axis=0)
         norm_inverse = np.linalg.inv(norm)
         self.weights = np.matmul(norm_inverse, projection)  # unit conversion to 'LAMMPS real'
-
-        print(np.round(time.time() - t_, 2), 's')
 
     def refit(self, relative_error_filter=10):
         y = []
@@ -354,14 +345,12 @@ class TrajectoryMatching:
     def fit_gamma(self, T=273):
         if len(self.weights) == 0:
             raise RuntimeError("Run fit() first")
-        print("Fitting gamma\t", end='')
-        t_ = time.time()
 
         k = 8.314 / 4184  # kcal/mol-K
         gamma_0 = 0
         gamma_2 = 0
         n = self.a.shape[0]
-        for t in range(n):
+        for t in tqdm(range(n), desc="fitting gamma"):
             b_matrix = self.b_matrix(t)
             b_matrix_pinv = np.linalg.pinv(b_matrix)
             v = np.swapaxes(self.v[t], 0, 1)
@@ -377,7 +366,6 @@ class TrajectoryMatching:
         gamma_0, gamma_2 = -gamma_0 / n, gamma_2 / n
         gamma_1 = 3 * 2 * self.r.shape[1] * k * T / (self.timestep)
 
-        print(np.round(time.time() - t_, 2), 's')
         return np.roots([gamma_2, gamma_1, gamma_0])[1]
 
     def best_subset(self, k_list, x, center_y=False, print_coeffs=False, plot=False):
@@ -515,22 +503,29 @@ class TrajectoryMatching:
         else:
             return Y
 
-    def write_pair_table(self, energy_fit_x, n, outfile_path='pair.table', energy_fit_params=0):
+    def write_pair_table(self, energy_fit_x, n, outfile_path='pair.table', energy_fit_params=0, min_cutoff=4):
         x = np.arange(1, n + 1, 1)
         x = np.sqrt(x)
         x *= self.cutoff / x[-1]
         f = self.predict(x)
-        if energy_fit_params != 0:
+        if energy_fit_params == 0:
             e = self.predict_energy(energy_fit_x, x)
         else:
-            e = self.predict_energy(energy_fit_x, x, energy_fit_params)
+            e = self.predict_energy(energy_fit_x, x, best_subset_=energy_fit_params)
 
         file_ = open(outfile_path, 'w')
         file_.write("1-1\n")
         file_.write(f"N {len(x)}\tRSQ {x[0]} {x[-1]}\n\n")
 
         for idx, x_ in enumerate(x):
-            file_.write(f"{idx + 1} {x_} {e[idx]} {f[idx]}\n")
+            e_ = e[idx]
+            f_ = f[idx]
+            if x_ < min_cutoff:
+                if e_ < e[idx + 1]:
+                    e_ = max(e)
+                if f_ < f[idx + 1]:
+                    f_ = max(f)
+            file_.write(f"{idx + 1} {x_} {e_} {f_}\n")
         file_.close()
 
     def plot_rdf(self, r_max=17.5, dr=0.1, plot=True, outfile_path=''):

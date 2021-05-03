@@ -116,10 +116,22 @@ def radial_distribution_function(x, y, z, s, r_max, dr):
     return g_average, radii, interior_indices
 
 
-def mean_squared_displacement():
-    msd = []
+def mean_squared_displacement(r):
+    r_0 = r[np.newaxis, 0, :, :]
+    r_0 = np.repeat(r_0, len(r), axis=0)
+    msd = (r - r_0) ** 2
+    msd = np.sum(msd, axis=-1)
+    msd = np.mean(msd, axis=-1)
     return msd
 
+
+def density(tm):
+    mass = np.sum(tm.data[0, :, 0])
+    mass /= 6.022e23
+    v = np.prod(tm.box_dimensions, axis=1)
+    v = np.mean(v)
+    v *= 1e-24
+    print(f"density: {mass / v} g/cm3")
 
 
 def augment(x, y, z, s):
