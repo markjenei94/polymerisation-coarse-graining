@@ -13,3 +13,4 @@
 /lj_test/trajectory_match/heavy_npt.out
 /lj_test/trajectory_match/lj_test_gamma_demo.out
 /lj_test/trajectory_match/small_npt.out
+tm_vs_true.ipynb

@@ -1,20 +1,25 @@
 import itertools
-from multiprocessing import Pool
 
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
 
-from misc import plot_1component, radial_distribution_function
+from misc import plot_1component
 
 
 class TrajectoryMatching:
 
-    def __init__(self, outfile_path, basis, basis_parameters, simulation_timestep=1, cutoff=20,
-                 every_n_from_output=1, timesteps_in_fit=100, system_style='atomic', op_sys='Linux'):
+    def __init__(self, outfile_path, basis, basis_parameters, simulation_timestep=1., cutoff=20, every_n_from_output=1,
+                 timesteps_in_fit=100, system_style='atomic', op_sys='Linux', cg_instructions=None):
+
+        if system_style not in ["atomic", "molecular"]:
+            raise ValueError("'system_style' most be either 'atomic' or 'molecular'")
+        else:
+            self.system_style = system_style
+        self.op_sys = op_sys
 
         self.t = every_n_from_output
-        self.n = timesteps_in_fit
+        self.n = timesteps_in_fit + 2  # first and last position does not correspond to acceleration
         self.outfile_path = outfile_path
         self.output_properties = []
         self.timestep = simulation_timestep
@@ -28,20 +33,24 @@ class TrajectoryMatching:
         self.box_lo = []
         self.data = []
         self.r = []
+        self.ru = []
         self.v = []
         self.a = []
         self.f = []
-        if system_style not in ["atomic", "molecular"]:
-            raise ValueError("'system_style' most be either 'atomic' or 'molecular'")
+        self.cons_force_table_dict = {}
+
+        if cg_instructions is None:
+            self.cg_instructions = {}
         else:
-            self.system_style = system_style
-        self.op_sys = op_sys
-
-        self.read_data()
-
+            self.cg_instructions = cg_instructions
+        self.bond_length = 0.
+        self.bonded_pairs = []
         self.feature_matrix = []
         self.target_vector = []
         self.weights = []
+        self.bonded_weight = 0.
+
+        self.read_data()
 
     def read_data(self):
         t = -1
@@ -63,26 +72,46 @@ class TrajectoryMatching:
                         self.output_properties = output_properties
         self.timestep *= self.t
 
-        with open(self.outfile_path) as f:
-            for l, line in enumerate(f):
-                pass
-        l += 1
+        l = sum(1 for _ in open(self.outfile_path, 'rb'))
+
+        data_append = 0
+        box_append = 0
 
         with open(self.outfile_path) as f:
             t = -1
-            pbar = tqdm(total=self.n, desc="loading data")
+            pbar = tqdm(total=self.n, desc="loading")
+            data_t = []
             for i in range(l):
                 line = f.readline().split()
+                if len(line) == 0:
+                    continue
                 if len(line) == 2:
                     if line[1] == "TIMESTEP":
                         t += 1
-                        if len(self.data) == self.n:
-                            break
-                        if t % self.t == 0:
-                            pbar.update(1)
-                            self.data.append([])
+                        if (t - 1) % self.t == 0:
+                            data_append += 1
+                            if self.system_style == "molecular" and len(data_t) > 0:
+                                data_t = np.array(data_t)
+                                mol_ids = np.unique(data_t[:, int(np.where(self.output_properties[1:] == 'mol')[0][0])])
+                                reduced_data = []
+                                for id in mol_ids:
+                                    data_mol = self.reduce_to_centre_of_mass(data_t, id, len(reduced_data))
+                                    for data_ in data_mol:
+                                        reduced_data.append(data_)
+                                self.data.append(np.array(reduced_data))
+                                pbar.update(1)
+                            else:
+                                if len(data_t) > 0:
+                                    self.data.append(np.array(data_t))
+                                    pbar.update(1)
+                            if len(self.data) == self.n:
+                                break
+                            data_t = []
+                elif line[0] != 'ITEM:' and len(line) == len(output_properties) and t % self.t == 0:
+                    data_t.append(np.array(line).astype(float)[1:])
                 elif len(line) == 6 and t % self.t == 0:
                     if line[1] == "BOX":
+                        box_append += 1
                         dimensions = []
                         self.box_lo.append([])
                         for j in range(3):
@@ -91,86 +120,29 @@ class TrajectoryMatching:
                             self.box_lo[-1].append(float(line[0]))
                         i += 3
                         self.box_dimensions.append(dimensions)
-                elif len(line) == len(output_properties) and t % self.t == 0:
-                    self.data[-1].append(np.array(line).astype(float)[1:])
         pbar.close()
-        self.box_dimensions = np.array(self.box_dimensions)
+
+        self.box_dimensions = np.array(self.box_dimensions)[:len(self.data)]
+        self.box_lo = np.array(self.box_lo)[:len(self.data)]
         self.data = np.array(self.data)
-        self.box_lo = np.array(self.box_lo)
 
-    def average_force(self, force):
-        periods = self.t
-        weights = np.ones(periods) / periods
-        return np.convolve(force, weights, mode='valid')
 
-    def _reduce_to_centre_of_mass(self, mol_id):
-        data = np.array(self.data)
-        n = np.array(self.data).shape[0]
-        data = data[data[:, :, 1] == mol_id]
-        data = np.reshape(data, (n, -1, data.shape[-1]))
-        columns = np.nonzero(~ ((self.output_properties[1:] == 'mass') | (self.output_properties[1:] == 'xu') | (
-                self.output_properties[1:] == 'yu') | (self.output_properties[1:] == 'zu')))
-        data = np.delete(data, columns, axis=2)
+        if self.system_style == "molecular" and len(self.cg_instructions.keys()) > 0:
+            bonded_pairs = np.zeros((self.data.shape[1], self.data.shape[1]))
+            for pair in self.bonded_pairs:
+                bonded_pairs[pair[0], pair[1]] = 1
+            self.bonded_pairs = bonded_pairs
+            self.calculate_eq_bond_length()
 
-        m = np.sum(data[0], axis=0)[0]
-        data = np.swapaxes(data, 1, 2)
-        data[:, 1:] = data[:, 1:] * data[0, 0] / m
-        data = np.swapaxes(data, 1, 2)
-        data = np.sum(data, axis=1)
-
-        return data
-
-    def _construct_features(self, packed_t_data):
-        np.seterr(all='ignore')
-
-        r_t = packed_t_data[0]
-        box_dimensions = packed_t_data[1]
-        x_train = []
-        y_train = []
-        z_train = []
-
-        lx, ly, lz = box_dimensions[0], box_dimensions[1], box_dimensions[2]
-        relative_pos_x = d_x = -np.subtract.outer(r_t[:, 0], r_t[:, 0])
-        relative_pos_y = d_y = -np.subtract.outer(r_t[:, 1], r_t[:, 1])
-        relative_pos_z = d_z = -np.subtract.outer(r_t[:, 2], r_t[:, 2])
-        pbc_relative_pos_x = d_pbc_x = np.where(np.abs(d_x) >= 0.5 * lx, d_x - np.sign(d_x) * lx, relative_pos_x)
-        pbc_relative_pos_y = d_pbc_y = np.where(np.abs(d_y) >= 0.5 * ly, d_y - np.sign(d_y) * ly, relative_pos_y)
-        pbc_relative_pos_z = d_pbc_z = np.where(np.abs(d_z) >= 0.5 * lz, d_z - np.sign(d_z) * lz, relative_pos_z)
-        pbc_dist = np.sqrt(d_pbc_x ** 2 + d_pbc_y ** 2 + d_pbc_z ** 2)
-
-        for pair_type in self.unique_type_pairs:
-            for p in self.basis_params:
-                force_p = self.basis(pbc_dist, p)
-                force_p = np.nan_to_num(force_p, posinf=0, neginf=0, nan=0)
-                force_p = np.where(pbc_dist > self.cutoff, 0, force_p)
-                force_p = np.where(self.atom_type_pairs != pair_type, 0, force_p)
-
-                force_p_x = np.nan_to_num(force_p * pbc_relative_pos_x / pbc_dist, posinf=0, neginf=0, nan=0)
-                force_p_y = np.nan_to_num(force_p * pbc_relative_pos_y / pbc_dist, posinf=0, neginf=0, nan=0)
-                force_p_z = np.nan_to_num(force_p * pbc_relative_pos_z / pbc_dist, posinf=0, neginf=0, nan=0)
-
-                x_train.append(np.sum(force_p_x, axis=0))
-                y_train.append(np.sum(force_p_y, axis=0))
-                z_train.append(np.sum(force_p_z, axis=0))
-
-        return [x_train, y_train, z_train]
-
-    def prepare_training_data(self, only_r=False):
-        print("preparing input")
         if self.system_style == "atomic":
             f_columns = np.nonzero(~ ((self.output_properties[1:] == 'fx') | (self.output_properties[1:] == 'fy') |
                                       (self.output_properties[1:] == 'fz')))
             self.f = np.array(np.delete(self.data, f_columns, axis=2))
 
         if self.system_style == "molecular":
-            mol_ids = np.unique(self.data[:, :, int(np.where(self.output_properties[1:] == 'mol')[0])])
 
-            reduced_data = []
-            for id in mol_ids:
-                reduced_data.append(self._reduce_to_centre_of_mass(id))
-
-            self.data = np.swapaxes(np.array(reduced_data), 0, 1)
             ru = self.data[:, :, 1:4]
+            self.ru = ru
 
             shift_to_centre = np.repeat([np.array(self.box_lo)], np.array(self.data).shape[1], axis=0)
             shift_to_centre = np.swapaxes(shift_to_centre, 0, 1)
@@ -182,6 +154,7 @@ class TrajectoryMatching:
             self.r = ru - self.r
 
         elif self.system_style == "atomic":
+            self.ru = self.data[:, :, 4:7]
             r_columns = np.nonzero(~ ((self.output_properties[1:] == 'x') | (self.output_properties[1:] == 'y') |
                                       (self.output_properties[1:] == 'z')))
             self.r = np.array(np.delete(self.data, r_columns, axis=2))
@@ -195,9 +168,6 @@ class TrajectoryMatching:
         v = d / self.timestep
         self.v = v
         self.a = (v[1:] - v[:-1]) / self.timestep
-
-        if only_r:
-            return
 
         atom_types, atom_types_dict, id = [], {}, 0
         for row in self.data[0]:
@@ -217,31 +187,119 @@ class TrajectoryMatching:
         self.atom_type_pairs = atom_type_pairs
         self.unique_type_pairs = np.unique(np.ravel(np.array(self.atom_type_pairs)))
 
-        vec_packed_t_data = []
-        for t in range(len(self.r)):
-            vec_packed_t_data.append([self.r[t], self.box_dimensions[t]])
+    def calculate_eq_bond_length(self):
+        lengths = []
+        for pair in self.bonded_pairs[::2]:
+            pair_id = np.nonzero(pair == 1.)
+            if not len(pair_id[0]) == 0:
+                id1 = int(pair_id[0])
+                id2 = id1 - 1
+            else:
+                continue
+            pos1 = self.data[:, id1, 1:]
+            pos2 = self.data[:, id2, 1:]
+            length = np.sum((pos1 - pos2) ** 2, axis=1)
+            lengths.append(np.sqrt(length))
+        self.bond_length = np.average(lengths)
 
-        if self.op_sys == "Linux" or self.op_sys == "UNIX" or self.op_sys == "L":
-            train_features = Pool().map(self._construct_features, vec_packed_t_data)
+    def reduce_to_centre_of_mass(self, data, mol_id, list_l):
+        data = data[data[:, 1] == mol_id]
+        data = np.reshape(data, (-1, data.shape[-1]))
+        columns = np.nonzero(~ ((self.output_properties[1:] == 'mass') | (self.output_properties[1:] == 'xu') | (
+                self.output_properties[1:] == 'yu') | (self.output_properties[1:] == 'zu')))
+        data = np.delete(data, columns, axis=1)
+
+        if int(mol_id) not in list(self.cg_instructions.keys()):
+            m = np.sum(data, axis=0)[0]
+            data = np.swapaxes(data, 0, 1)
+            data[1:] = data[1:] * data[0] / m
+            data = np.swapaxes(data, 0, 1)
+            data = np.sum(data, axis=0)
+            data = data[np.newaxis, :]
         else:
-            train_features = []
-            for inp in vec_packed_t_data:
-                train_features.append(self._construct_features(inp))
-        train_features = np.swapaxes(train_features, 0, 1)
+            self.bonded_pairs.append([list_l, list_l + 1])
+            self.bonded_pairs.append([list_l + 1, list_l])
+            data_list = []
+            duplicates = []
+            for id in self.cg_instructions[mol_id][0]:
+                if id in self.cg_instructions[mol_id][1]:
+                    duplicates.append(id)
+            duplicates = np.array(duplicates)
+            data[duplicates, 0] /= 2.
+            for atom_ids in self.cg_instructions[mol_id]:
+                atom_ids = np.array(atom_ids)
+                m = np.sum(data[atom_ids], axis=0)[0]
+                data_ = data[atom_ids, :]
+                data_ = np.swapaxes(data_, 0, 1)
+                data_[1:] = data_[1:] * data_[0] / m
+                data_ = np.swapaxes(data_, 0, 1)
+                data_ = np.sum(data_, axis=0)
+                data_list.append(data_)
+            data = data_list
+        return data
+
+    def _construct_features(self, r_t, box_dimensions):
+        np.seterr(all='ignore')
+
+        x_train = []
+        y_train = []
+        z_train = []
+
+        lx, ly, lz = box_dimensions[0], box_dimensions[1], box_dimensions[2]
+        relative_pos_x = d_x = -np.subtract.outer(r_t[:, 0], r_t[:, 0])
+        relative_pos_y = d_y = -np.subtract.outer(r_t[:, 1], r_t[:, 1])
+        relative_pos_z = d_z = -np.subtract.outer(r_t[:, 2], r_t[:, 2])
+        pbc_relative_pos_x = d_pbc_x = np.where(np.abs(d_x) >= 0.5 * lx, d_x - np.sign(d_x) * lx, relative_pos_x)
+        pbc_relative_pos_y = d_pbc_y = np.where(np.abs(d_y) >= 0.5 * ly, d_y - np.sign(d_y) * ly, relative_pos_y)
+        pbc_relative_pos_z = d_pbc_z = np.where(np.abs(d_z) >= 0.5 * lz, d_z - np.sign(d_z) * lz, relative_pos_z)
+        pbc_dist = np.sqrt(d_pbc_x ** 2 + d_pbc_y ** 2 + d_pbc_z ** 2)
+
+        for pair_type in self.unique_type_pairs:
+            for p in self.basis_params:
+                force_p = self.basis(pbc_dist, p)
+                force_p = np.nan_to_num(force_p, posinf=0, neginf=0, nan=0)
+                force_p = np.where(pbc_dist > self.cutoff, 0, force_p)
+                force_p = np.where(self.atom_type_pairs != pair_type, 0, force_p)
+                if len(self.cg_instructions.keys()) > 0:
+                    force_p = np.where(self.bonded_pairs == 1., 0, force_p)
+                force_p_x = np.nan_to_num(force_p * pbc_relative_pos_x / pbc_dist, posinf=0, neginf=0, nan=0)
+                force_p_y = np.nan_to_num(force_p * pbc_relative_pos_y / pbc_dist, posinf=0, neginf=0, nan=0)
+                force_p_z = np.nan_to_num(force_p * pbc_relative_pos_z / pbc_dist, posinf=0, neginf=0, nan=0)
+
+                x_train.append(np.sum(force_p_x, axis=0))
+                y_train.append(np.sum(force_p_y, axis=0))
+                z_train.append(np.sum(force_p_z, axis=0))
+
+        # TODO: generalise so that more than one type of monomer can be cg'd to double-beads
+        if len(self.cg_instructions.keys()) > 0:
+            force_bonded = np.abs(pbc_dist) - self.bond_length
+            force_bonded = np.nan_to_num(force_bonded, posinf=0, neginf=0, nan=0)
+            force_bonded = np.where(self.bonded_pairs == 0., 0, force_bonded)
+
+            force_p_x = np.nan_to_num(force_bonded * pbc_relative_pos_x / pbc_dist, posinf=0, neginf=0, nan=0)
+            force_p_y = np.nan_to_num(force_bonded * pbc_relative_pos_y / pbc_dist, posinf=0, neginf=0, nan=0)
+            force_p_z = np.nan_to_num(force_bonded * pbc_relative_pos_z / pbc_dist, posinf=0, neginf=0, nan=0)
+
+            x_train.append(np.sum(force_p_x, axis=0))
+            y_train.append(np.sum(force_p_y, axis=0))
+            z_train.append(np.sum(force_p_z, axis=0))
+
+        return [x_train, y_train, z_train]
+
+    def prepare_training_data(self, t):
+        train_features = self._construct_features(self.r[t + 1], self.box_dimensions[t + 1])  # t + 1 'r' => t 'a'
         x_train = train_features[0]
         y_train = train_features[1]
         z_train = train_features[2]
-        feature_matrix_t = np.concatenate((x_train, y_train, z_train), axis=2)[1:-1]
+        feature_matrix_t = np.concatenate((x_train, y_train, z_train), axis=1)
 
-        target_vector = np.swapaxes(self.a, 1, 2)
-        target_vector = np.reshape(target_vector,
-                                   (np.size(self.a, axis=0), np.size(self.a, axis=2) * np.size(self.a, axis=1)))
+        target_vector = np.swapaxes(self.a[t], 0, 1)
+        target_vector = np.reshape(target_vector, -1)
 
         m = np.ravel(list([self.data[0, :, 0]]) * 3)
         target_vector = target_vector * m / 4.184e-4
 
-        self.feature_matrix = feature_matrix_t
-        self.target_vector = target_vector
+        return feature_matrix_t, target_vector
 
     def b_matrix(self, t):
         t = t + 1  # due to how 'v' is calculated
@@ -278,38 +336,27 @@ class TrajectoryMatching:
 
         return b_matrix_t
 
-    def fit_core(self, t, method):
-        target_vector_t = self.target_vector[t]
+    def _fit_core(self, t, method):
+        feature_matrix_t, target_vector_t = self.prepare_training_data(t)
         if method == 'nve' or method == 'NVE':
-            norm = np.matmul(self.feature_matrix[t], self.feature_matrix[t].T)
-            projection = np.matmul(self.feature_matrix[t], target_vector_t)
+            norm = np.matmul(feature_matrix_t, feature_matrix_t.T)
+            projection = np.matmul(feature_matrix_t, target_vector_t)
         else:
             b_matrix = self.b_matrix(t)
             b_matrix_t_pinv = np.linalg.pinv(b_matrix)
-            norm = np.matmul(b_matrix_t_pinv, self.feature_matrix[t].T)
-            norm = np.matmul(self.feature_matrix[t], norm)
+            norm = np.matmul(b_matrix_t_pinv, feature_matrix_t.T)
+            norm = np.matmul(feature_matrix_t, norm)
             projection = np.matmul(b_matrix_t_pinv, target_vector_t)
-            projection = np.matmul(self.feature_matrix[t], projection)
+            projection = np.matmul(feature_matrix_t, projection)
 
         return [norm, projection]
 
     def fit(self, method=''):
         projections = []
         norms = []
-        # For some reason, pooling works slower here, probably due some matmul multiprocess
-        '''if self.op_sys == "Linux" or self.op_sys == "UNIX" or self.op_sys == "L":
-            t = range(self.feature_matrix.shape[0])
-            norm_projection = Pool().map(self.fit_core, t)
-
-            norms = []
-            projections = []
-            for idx, res in enumerate(norm_projection):
-                norms.append(np.array(norm_projection[idx][0]))
-                projections.append(np.array(norm_projection[idx][1]))
-            else:'''
-        pbar = tqdm(total=len(self.feature_matrix), desc="fitting")
-        for t, feature_matrix_t in enumerate(self.feature_matrix):
-            norm_projection = self.fit_core(t, method)
+        pbar = tqdm(total=len(self.a), desc="fitting")
+        for t in range(len(self.r) - 2):
+            norm_projection = self._fit_core(t, method)
             norms.append(np.array(norm_projection[0]))
             projections.append(np.array(norm_projection[1]))
             pbar.update(1)
@@ -320,6 +367,14 @@ class TrajectoryMatching:
         norm = np.sum(norms, axis=0)
         norm_inverse = np.linalg.inv(norm)
         self.weights = np.matmul(norm_inverse, projection)  # unit conversion to 'LAMMPS real'
+
+        if len(self.cg_instructions.keys()) > 0:
+            self.bonded_weight = self.weights[-1]
+            self.weights = self.weights[:-1]
+
+        if self.bond_length > 0:
+            print("equilibrium bond length: ", self.bond_length)
+            print("bonded weight: ", polymer_tm.bonded_weight)
 
     def refit(self, relative_error_filter=10):
         y = []
@@ -350,7 +405,7 @@ class TrajectoryMatching:
         gamma_0 = 0
         gamma_2 = 0
         n = self.a.shape[0]
-        for t in tqdm(range(n), desc="fitting gamma"):
+        for t in range(n):
             b_matrix = self.b_matrix(t)
             b_matrix_pinv = np.linalg.pinv(b_matrix)
             v = np.swapaxes(self.v[t], 0, 1)
@@ -358,7 +413,8 @@ class TrajectoryMatching:
 
             g_2 = np.matmul(b_matrix, v)
             gamma_2 += np.matmul(v.T, g_2)
-            f_c = np.matmul(self.feature_matrix[t].T, np.array(self.weights))
+            weights = np.append(self.weights, self.bonded_weight)
+            f_c = np.matmul(self.feature_matrix[t].T, np.array(weights))
             f_diff = (self.target_vector[t] - f_c)
             g_0 = np.matmul(b_matrix_pinv, f_diff)
             gamma_0 += np.matmul(f_diff, g_0)
@@ -368,89 +424,47 @@ class TrajectoryMatching:
 
         return np.roots([gamma_2, gamma_1, gamma_0])[1]
 
-    def best_subset(self, k_list, x, center_y=False, print_coeffs=False, plot=False):
+    def best_subset(self, k_list, x, force_index, plot=False):
         original_weights = np.array(self.weights).copy()
         original_params = np.array(self.basis_params).copy()
-        y_target = self.predict(x)
-        offset = 0
-        if center_y:
-            offset = y_target[-1]
-            y_target -= offset
+        y_target = self.predict(x)[force_index]
         RSS = {}
         weights = {}
-        if type(k_list) == tuple:
-            X = []
-            for param in k_list:
-                if param == 0 or param == -1:
-                    Warning("Energy fit might be inaccurate if polynomial basis param is 0 or -1")
-                X.append(self.basis(x, param))
-            X = np.array(X)
-            projection = np.matmul(X, y_target)
-            norm = np.matmul(X, X.T)
-            norm_inverse = np.linalg.inv(norm)
-            w = np.matmul(norm_inverse, projection)
-            weights[tuple(k_list)] = w
-            self.weights = w
-            self.basis_params = k_list
-            RSS[tuple(k_list)] = np.sqrt(np.sum((self.predict(x) - y_target) ** 2)) / float(len(x))
-        elif type(k_list) == int:
+        if type(k_list) == int:
             k_list = [k_list]
-
-        if len(weights) == 0:
-            for k in k_list:
-                original_params_ = []
-                for p_ in original_params:
-                    if p_ != 0 and p_ != -1 and p_ >= -15:
-                        original_params_.append(p_)
-                if k > len(original_params_):
-                    k = len(original_params_)
-                for params in itertools.combinations(original_params_, k):
-                    X = []
-                    for param in params:
-                        X.append(self.basis(x, param))
-                    X = np.array(X)
-                    projection = np.matmul(X, y_target)
-                    norm = np.matmul(X, X.T)
-                    norm_inverse = np.linalg.inv(norm)
-                    w = np.matmul(norm_inverse, projection)
-                    weights[tuple(params)] = w
-                    self.weights = w
-                    self.basis_params = params
-                    RSS[tuple(params)] = np.sqrt(np.sum((self.predict(x) - y_target) ** 2)) / float(len(x))
-
+        for k in k_list:
+            for params in itertools.combinations(original_params, k):
+                X = []
+                for param in params:
+                    X.append(self.basis(x, param))
+                X = np.array(X)
+                projection = np.matmul(X, y_target)
+                norm = np.matmul(X, X.T)
+                norm_inverse = np.linalg.inv(norm)
+                w = np.matmul(norm_inverse, projection)
+                weights[tuple(params)] = w
+                self.weights = w
+                self.basis_params = params
+                RSS[tuple(params)] = np.sqrt(np.sum((self.predict(x, single=True)[0] - y_target) ** 2)) / float(
+                    len(x))
         RSS = dict(sorted(RSS.items(), key=lambda item: item[1]))
         key = list(RSS.keys())[0]
-
         self.weights = weights[key]
         self.basis_params = np.array(key)
         if plot:
-            y_fit_ = self.predict(x)
+            y_fit_ = self.predict(x, single=True)[0]
             if len(y_target) == len(x):
-                plot_1component(x, y_target, y_fit_, labels=["reduced parameter set", "TM fit"])
+                plot_1component(x, y_fit_, y_target, labels=["reduced parameter set", "TM fit"])
             else:
                 plot_1component(x, y_fit_, labels=["TM fit"])
-
-        if print_coeffs:
-            print("pair_coeff\t1 1 ", end='')
-            for p in range(0, -15, -1):
-                if p in self.basis_params:
-                    if p == 0:
-                        print(self.weights[self.basis_params == p][0] - offset, end='  ')
-                    else:
-                        print(self.weights[self.basis_params == p][0], end='  ')
-                elif p == 0 and center_y:
-                    print(offset, end='  ')
-                else:
-                    print('0 ', end='  ')
-            print('\n')
-
         self.basis_params = original_params
         self.weights = original_weights
-
         return np.array(key), weights[key]
 
-    def predict(self, x):
+    def predict(self, x, single=False):
         number_of_type_pairs = len(self.unique_type_pairs)
+        if single:
+            number_of_type_pairs = 1
         p = len(self.weights)
         number_of_forces = int(p / number_of_type_pairs)
         Y = []
@@ -462,93 +476,118 @@ class TrajectoryMatching:
             for j in range(len(self.basis_params)):
                 y = y + self.weights[i * number_of_forces + j] * self.basis(x, self.basis_params[j])
             Y.append(y)
-        if number_of_type_pairs == 1:
-            return np.array(Y[0])
-        else:
-            return Y
+        return Y
 
-    def predict_energy(self, x_fit, x_plot, best_subset_=0):
-        if best_subset_ == 0:
-            best_subset_ = max(2, len(self.basis_params) - 3)
-        pars, weights_ = self.best_subset(best_subset_, x_fit)
-
-        weights = np.zeros(len(self.basis_params))
-        for idx, param in enumerate(pars):
-            weights[self.basis_params == param] += weights_[idx]
-
+    def predict_energy(self, x, force=None):
         number_of_type_pairs = len(self.unique_type_pairs)
-        p = len(weights)
-        number_of_forces = int(p / number_of_type_pairs)
+        if force is None:
+            Y_force = self.predict(x)
+        else:
+            Y_force = [force]
         Y = []
         for i in range(number_of_type_pairs):
-            if type(x_plot) == float:
-                y = 0
-            else:
-                y = np.zeros(len(x_plot))
-            for j, param in enumerate(self.basis_params):
-                w = weights[i * number_of_forces + j]
-                if w == 0:
-                    continue
-                if param == 0:
-                    # continue
-                    y = y + w * x_plot
-                elif param == -1:
-                    # y = y + w * np.log(x)
-                    continue
-                else:
-                    y = y + w / np.abs(param + 1) * x_plot ** (param + 1)
-            Y.append(y)
-        if number_of_type_pairs == 1:
-            return np.array(Y[0])
-        else:
-            return Y
+            f = Y_force[i]
+            e_ = []
+            for i in range(len(f) - 1, -1, -1):
+                e_.append(np.trapz(f[i:], x[i:]))
+            e_ = e_[::-1]
+            Y.append(e_)
+            if force is not None:
+                break
+        return Y
 
-    def write_pair_table(self, energy_fit_x, n, outfile_path='pair.table', energy_fit_params=0, min_cutoff=4):
-        x = np.arange(1, n + 1, 1)
-        x = np.sqrt(x)
-        x *= self.cutoff / x[-1]
-        f = self.predict(x)
-        if energy_fit_params == 0:
-            e = self.predict_energy(energy_fit_x, x)
-        else:
-            e = self.predict_energy(energy_fit_x, x, best_subset_=energy_fit_params)
+    def radial_distirbution_function(self, dr, pair_type=None, bonded_pairs=True, only_bonded_pairs=False, plot=True):
+        if pair_type is None:
+            pair_type = self.unique_type_pairs[0]
 
-        file_ = open(outfile_path, 'w')
-        file_.write("1-1\n")
-        file_.write(f"N {len(x)}\tRSQ {x[0]} {x[-1]}\n\n")
+        pbc_dist_list = []
+        r = self.r
+        for t in range(len(r)):
+            lx, ly, lz = self.box_dimensions[t][0], self.box_dimensions[t][1], \
+                         self.box_dimensions[t][2]
+            relative_pos_x = d_x = -np.subtract.outer(r[t][:, 0], r[t][:, 0])
+            relative_pos_y = d_y = -np.subtract.outer(r[t][:, 1], r[t][:, 1])
+            relative_pos_z = d_z = -np.subtract.outer(r[t][:, 2], r[t][:, 2])
+            pbc_relative_pos_x = np.where(np.abs(d_x) >= 0.5 * lx, d_x - np.sign(d_x) * lx, relative_pos_x)
+            pbc_relative_pos_y = np.where(np.abs(d_y) >= 0.5 * ly, d_y - np.sign(d_y) * ly, relative_pos_y)
+            pbc_relative_pos_z = np.where(np.abs(d_z) >= 0.5 * lz, d_z - np.sign(d_z) * lz, relative_pos_z)
+            pbc_dist = np.sqrt(pbc_relative_pos_x ** 2 + pbc_relative_pos_y ** 2 + pbc_relative_pos_z ** 2)
 
-        for idx, x_ in enumerate(x):
-            e_ = e[idx]
-            f_ = f[idx]
-            if x_ < min_cutoff:
-                if e_ < e[idx + 1]:
-                    e_ = max(e)
-                if f_ < f[idx + 1]:
-                    f_ = max(f)
-            file_.write(f"{idx + 1} {x_} {e_} {f_}\n")
-        file_.close()
+            pbc_dist = np.where(self.atom_type_pairs == pair_type, pbc_dist, 0)
 
-    def plot_rdf(self, r_max=17.5, dr=0.1, plot=True, outfile_path=''):
-        g_list = []
-        radii = []
-        for t in range(len(self.r)):
-            x = self.r[t, :, 0]
-            y = self.r[t, :, 1]
-            z = self.r[t, :, 2]
-            s = np.mean(self.box_dimensions[t])
-            # x, y, z = augment(x, y, z, s)
-            g, radii, indices = radial_distribution_function(x, y, z, s * 3, r_max, dr)
-            g_list.append(g)
-        g_list = np.array(g_list)
-        g_ave = np.mean(g_list, axis=0)
+            if not bonded_pairs:
+                pbc_dist = np.where(self.bonded_pairs == 1., 0., pbc_dist)
+            elif only_bonded_pairs:
+                pbc_dist = np.where(self.bonded_pairs == 0., 0., pbc_dist)
+
+            pbc_dist_list.append(pbc_dist)
+
+        pbc_dist_list = np.array(pbc_dist_list).reshape(-1)
+        pbc_dist_list = pbc_dist_list[pbc_dist_list != 0.]
+        pbc_dist_list = pbc_dist_list[pbc_dist_list < np.mean(self.box_dimensions) / 2]
+        bin_list = np.floor(pbc_dist_list / dr).astype(int)
+
+        m = max(bin_list)
+        count, bins = np.histogram(bin_list, bins=int(m), range=[0, m])
+        bins = bins[:-1] * dr + dr / 2
+        count, bins = count[:-1], bins[:-1]
+        count = count / (4 * np.pi * bins ** 2 * dr)
+        count /= (len(r) * len(r[0]))
+        count /= (len(r[0]) / np.mean(self.box_dimensions) ** 3)
+
+        count *= (self.atom_type_pairs.size / (self.atom_type_pairs[self.atom_type_pairs == pair_type]).size)
 
         if plot:
-            fig, ax = plt.subplots()
-            ax.plot(radii, g_ave)
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
-            ax.spines["bottom"].set_visible(False)
-            ax.spines["left"].set_visible(False)
-            if outfile_path != '':
-                plt.savefig(outfile_path, bbox_inches='tight')
-        return radii, g_ave
+            plt.axhline(1, ls='--', color="xkcd:silver")
+            plt.plot(bins, count)
+            plt.xlabel(r"$r ({\AA})$")
+            plt.ylabel(r"$g(r)")
+            plt.title("Radial distirbution function")
+
+        return bins, count
+
+    def write_table(self, filename, key, x, e, f):
+        file_ = open(filename, 'w')
+        file_.write(f"{key}\n")
+        file_.write(f"N {len(x)}\tRSQ {x[0]} {x[-1]}\n\n")
+        for ix, x_ in enumerate(x):
+            file_.write(f"{ix + 1} {x_} {e[ix]} {f[ix]}\n")
+        file_.close()
+
+def basis_function(x, p):
+    return np.sign(x) * np.abs(x) ** p
+
+
+if __name__ == "__main__":
+
+    T = 350
+    PATH = "/home/markjenei/trajectory-matching/epoxy/"
+    outfile = PATH + "epoxy.out"
+
+
+    run = 1
+    steps_between_points = 1
+    configurations = 20
+    params = np.array(range(-1, -23, -2))
+
+    cg_ids_1 = [0] + list(range(1, 25))
+    cg_ids_2 = [0] + list(range(25, 49))
+
+    cg_instructions = {}
+    for i in range(1, 401):
+        cg_instructions[i] = [cg_ids_1, cg_ids_2]
+
+    polymer_tm = TrajectoryMatching(outfile_path=outfile, basis=basis_function, basis_parameters=params,
+                                    simulation_timestep=0.5, cutoff=50, system_style='molecular',
+                                    every_n_from_output=steps_between_points, timesteps_in_fit=configurations,
+                                    cg_instructions=cg_instructions)
+
+    polymer_tm.fit()
+    np.save(PATH + f"epoxy_{run}.npy", polymer_tm.weights)
+
+    x = np.linspace(7.0, 40, 10000)
+    y_fit_long = polymer_tm.predict(x)[0]
+    plot_1component(x, y_fit_long, output_path=PATH + f"epoxy_{run}_a.png")
+    x = np.linspace(2.5, 50, 10000)
+    y_fit_long = polymer_tm.predict(x)[0]
+    plot_1component(x, y_fit_long, output_path=PATH + f"epoxy_{run}_b.png")

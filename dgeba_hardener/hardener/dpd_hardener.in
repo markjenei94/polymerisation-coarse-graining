@@ -10,7 +10,7 @@ dimension	3
 boundary	p p p
 
 lattice	fcc 11
-region		box block 0 3 0 3 0 3
+region		box block 0 5 0 5 0 5
 create_box	1 box
 create_atoms	1 box
 comm_modify       vel yes
@@ -21,16 +21,14 @@ comm_modify       vel yes
 #						#
 ########				#########
 
-variable vTEMP    equal 403.0
-
-#pair_style	lj/cut 20
+variable vTEMP    equal 353.0
 
 pair_style        hybrid/overlay &
-                  dpd/tstat ${vTEMP} ${vTEMP} 20. 12345 &
+                  dpd/tstat ${vTEMP} ${vTEMP} 50. 12345 &
                   table linear 50001
 
-pair_coeff	1 1 table hardener_npt_400.table 1-1
-pair_coeff	1 1 dpd/tstat 10
+pair_coeff	1 1 table hardener_npt_350.table 1-1
+pair_coeff	1 1 dpd/tstat 7.26
 
 mass		1 102.181
 
@@ -47,7 +45,7 @@ neigh_modify    delay 10 every 1 one 5000
 
 
 fix               fNVE all nve
-fix               fPRESS all press/berendsen iso 7600.0 7600.0 3000.0 modulus 1000.0
+fix               fPRESS all press/berendsen iso 1.0 1.0 3000.0 modulus 1000.0
 
 velocity	all create ${vTEMP} 199085 mom no
 timestep	12.5
@@ -55,14 +53,18 @@ thermo_style	custom step temp press vol density #lx ly lz
 run_style	verlet
 thermo		100
 
-run		100000
+run		24000
 
 
-dump		2 all custom 1 hardener_dpd_npt_400.out id mass x y z xu yu zu fx fy fz
-dump_modify	2 sort id
-dump_modify	2 format line "%d %.2f %.12f %.12f %.12f %.12f %.12f %.12f %.12f %.12f %.12f"
+#dump		2 all custom 1 hardener_dpd_npt_350_new.out id mass x y z xu yu zu fx fy fz
+#dump_modify	2 sort id
+#dump_modify	2 format line "%d %.2f %.12f %.12f %.12f %.12f %.12f %.12f %.12f %.12f %.12f"
 
-run		20000
+compute		msd all msd com yes
+fix		msd all ave/time 1 1 100 c_msd[4] file hardener_npt_dpd_msd_50range.out
+
+
+run		25000
 
 # 4) Misc
 #######################

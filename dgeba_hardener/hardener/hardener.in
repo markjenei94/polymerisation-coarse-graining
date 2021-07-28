@@ -38,7 +38,7 @@ thermo_style	custom step temp press vol density
 run_style	verlet
 
 thermo		100
-run		4000 #00	
+run		10000
 
 #unfix 		1
 #fix		1 all nve
@@ -46,15 +46,16 @@ run		4000 #00
 
 #dump 		pos all xyz 1 lj.xyz
 
-#	compute 	cc1 all chunk/atom molecule
-#	compute 	myChunk all com/chunk cc1
-#	fix 		com all ave/time 5 1 5 c_myChunk[*] file trajectory_match_com.out mode vector
 
-dump		2 all custom 30 hardener_npt_xl.out id mass mol x y z xu yu zu
-dump_modify	2 sort id  
-dump_modify	2 format line "%d %.2f %d %.12f %.12f %.12f %.12f %.12f %.12f"
+#dump		2 all custom 30 hardener_npt_msd_test.out id mass mol x y z xu yu zu
+#dump_modify	2 sort id  
+#dump_modify	2 format line "%d %.2f %d %.12f %.12f %.12f %.12f %.12f %.12f"
 
-run		100000
+compute		msd all msd com yes
+fix		msd all ave/time 1 1 2500 c_msd[4] file hardener_npt_msd_builtin_hi.out
+
+
+run		200000
 
 
 # 4) Misc
@@ -66,8 +67,6 @@ run		100000
 #compute		RDF all rdf 150 cutoff 3.5
 #fix		RDF_OUTPUT all ave/time 25 100 5000 c_RDF[*] file rdf_lj.out mode vector
 
-#compute		MSD all msd
-#fix		MSD_OUTPUT all ave/correlate 1 5000 5000 c_MSD[*] file msd_lj.out ave running
 
 #compute		VACF all vacf
 #fix		VACF_OUTPUT all ave/correlate 1 2500 5000 c_VACF[*] file vacf_lj.out ave running

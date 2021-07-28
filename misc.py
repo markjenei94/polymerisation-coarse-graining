@@ -9,9 +9,9 @@ def plot_1component(x, y_fit, y=False, output_path=False, thermostat='NpT', titl
                     labels=("true", "fit"), y_label=r"$f_{ij}$"):
     fig, ax = plt.subplots(1, 1)
     if y is not False:
-        ax.plot(x, y, label=f"{labels[0]}", lw=2.5, color='xkcd:azure')
+        ax.plot(x, y, label=f"{labels[1]}", lw=2.5, color='xkcd:azure')
     ax.axhline(0, ls='--', color='xkcd:light grey')
-    ax.plot(x, y_fit, label=f"{labels[1]}", ls='-.', lw=2., color='xkcd:bright orange')
+    ax.plot(x, y_fit, label=f"{labels[0]}", ls='-.', lw=2., color='xkcd:bright orange')
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["bottom"].set_visible(False)
@@ -75,7 +75,7 @@ def lowess(y, f=0.01, iter=1):
     return yest
 
 
-def radial_distribution_function(x, y, z, s, r_max, dr):
+def radial_distribution_function(x, y, z, s, r_max, dr, exclude_bonded=False):
     """via https://github.com/cfinch/Shocksolution_Examples/blob/master/PairCorrelation/paircorrelation.py"""
 
     bools1 = x > r_max
@@ -102,6 +102,11 @@ def radial_distribution_function(x, y, z, s, r_max, dr):
         index = interior_indices[p]
         d = np.sqrt((x[index] - x) ** 2 + (y[index] - y) ** 2 + (z[index] - z) ** 2)
         d[index] = 2 * r_max
+        if exclude_bonded:
+            if index % 2 == 0:
+                d[index + 1] = 2 * r_max
+            else:
+                d[index - 1] = 2 * r_max
 
         (result, bins) = np.histogram(d, bins=edges, normed=False)
         g[p, :] = result / number_density
